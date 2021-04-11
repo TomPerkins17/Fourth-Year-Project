@@ -51,6 +51,7 @@ class InstrumentLoader:
         if not os.path.isfile(MAPS_pkl_path):
             print(MAPS_pkl_path, "not found, loading dataset manually")
             dataset_MAPS = self.load_MAPS()
+            soundfile.write("new_test.wav", dataset_MAPS["waveform"].iloc[1056], 44100) # test code
             with open(MAPS_pkl_path, "wb") as dumpfile:
                 pickle.dump(dataset_MAPS, dumpfile)
             print("Pickle saved as", MAPS_pkl_path)
@@ -98,13 +99,16 @@ class InstrumentLoader:
                             end_time = txt[1, 1]
                             pitch = int(txt[1, 2])
 
+                            # Assume 44.1kHz sampling rate
+                            Fs = 44100
                             # Read waveform
                             wav_file_read = inst_zip.read(file)
                             # audio_data_librosa, Fs = librosa.load(io.BytesIO(wav_file_read), mono=True, sr=None,
                             #                               offset=start_time, duration=end_time-start_time)
                             # Load codec wav PCM s16le 44100Hz using int16 datatype
-                            #Fs, audio_data = wavfile.read(io.BytesIO(wav_file_read))
-                            soundfile.read(io.BytesIO(wav_file_read), dtype="int16")
+                            # Fs, audio_data = wavfile.read(io.BytesIO(wav_file_read))
+                            audio_data, Fs = soundfile.read(io.BytesIO(wav_file_read), dtype="int16",
+                                                      start=int(start_time*Fs), stop=int(end_time*Fs))
                             # Sum to mono without dividing amplitude using 32 bits to prevent 16 bit overflow
                             audio_data = np.sum(audio_data.astype("int32"), axis=1)
 
@@ -112,6 +116,16 @@ class InstrumentLoader:
                             sample_row = pd.DataFrame([["MAPS", inst_name, audio_data, Fs, pitch, velocity, sustain, label]],
                                                       index=pd.Index([sample_name], name="filename"),
                                                       columns=["dataset", "instrument", "waveform", "Fs", "pitch", "velocity", "sustain", "label"])
+                            # sample_row = pd.DataFrame({"dataset": pd.Series(["MAPS"], dtype="category"),
+                            #                            "instrument": pd.Series([str(inst_name)], dtype="category"),
+                            #                            "waveform": [audio_data],
+                            #                            "Fs": pd.Series([Fs], dtype="category"),
+                            #                            "pitch": pd.Series([pitch], dtype="int8"),
+                            #                            "velocity": pd.Series([velocity], dtype="category"),
+                            #                            "sustain": pd.Series([sustain], dtype=bool),
+                            #                            "label": pd.Series([label], dtype="category")})
+                            # sample_row.index = pd.Index([sample_name], name="filename")
+
                             data = data.append(sample_row)
                     print("Loaded", inst_name)
         return data
