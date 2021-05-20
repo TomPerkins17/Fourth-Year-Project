@@ -14,7 +14,10 @@ from scipy.io import wavfile
 import soundfile
 
 data_dir = os.path.join("F:", "Data", "Fourth Year Project")
-MAPS_pkl_path = os.path.join(data_dir, "MAPS", "MAPS_test.pkl")
+pickle_dir = "data"
+MAPS_pkl_path = os.path.join(pickle_dir, "MAPS", "MAPS.pkl")
+BiVib_pkl_path = os.path.join(pickle_dir, "BiVib", "BiVib.pkl")
+melspec_pkl_path = os.path.join(pickle_dir, "melspec_preprocessed.pkl")
 
 
 class TimbreDataset(Dataset):
@@ -30,37 +33,54 @@ class TimbreDataset(Dataset):
         return row.spectrogram, row.label
 
 
-def generate_set_indices(data_len, partition_ratio=0.8, seed=42):
+def generate_set_indices(data_len, partition_ratios=None, seed=42):
     # make a random set of shuffled indices for sampling training/test sets randomly w/o overlap
+    if partition_ratios is None:
+        partition_ratios = [0.8, 0.1]
+    # Reproducible random shuffle of indices, using a fixed seed
     indices = np.arange(data_len)
-    # Reproducible random shuffle with the same seed
     rng = np.random.default_rng(seed=seed)
     rng.shuffle(indices)
-    # np.random.shuffle(indices)
-    split_point = int(data_len * partition_ratio)
-    indices_train = indices[:split_point]
-    indices_test = indices[split_point:]
-    return indices_train, indices_test
+
+    split_point_train = int(data_len * partition_ratios[0])
+    split_point_val = split_point_train + int(data_len * partition_ratios[1])
+    indices_train = indices[:split_point_train]
+    indices_val = indices[split_point_train:split_point_val]
+    indices_test = indices[split_point_val:]
+    return indices_train, indices_val, indices_test
 
 
 class InstrumentLoader:
-    def __init__(self, data_dir):
+    def __init__(self, data_dir, note_range=None, set_velocity=None):
+        # midi_range, if specified, restricts the notes used in the dataset
+        #   we will use C3 to C5 (2 octaves centred around middle C): MIDI 48-72
+        # velocity, if specified, restricts the velocities to medium
         self.data_dir = data_dir
         self.dataset = pd.DataFrame()
+        self.note_range = note_range
+        self.set_velocity = set_velocity
 
         if not os.path.isfile(MAPS_pkl_path):
             print(MAPS_pkl_path, "not found, loading dataset manually")
-            dataset_MAPS = self.load_MAPS()
-            soundfile.write("new_test.wav", dataset_MAPS["waveform"].iloc[1056], 44100) # test code
-            with open(MAPS_pkl_path, "wb") as dumpfile:
-                pickle.dump(dataset_MAPS, dumpfile)
+            dataset_MAPS = self.load_MAPS(self.note_range, self.set_velocity)
+            dataset_MAPS.to_pickle(MAPS_pkl_path)
             print("Pickle saved as", MAPS_pkl_path)
         else:
             print("Loading pickle from", MAPS_pkl_path)
-            dataset_MAPS = pickle.load(open(MAPS_pkl_path, "rb"))
+            dataset_MAPS = pd.read_pickle(MAPS_pkl_path)
         self.dataset = self.dataset.append(dataset_MAPS)
 
-    def load_MAPS(self):
+        if not os.path.isfile(BiVib_pkl_path):
+            print(BiVib_pkl_path, "not found, loading dataset manually")
+            dataset_BiVib = self.load_BiVib(self.note_range, self.set_velocity)
+            dataset_BiVib.to_pickle(BiVib_pkl_path)
+            print("Pickle saved as", BiVib_pkl_path)
+        else:
+            print("Loading pickle from", BiVib_pkl_path)
+            dataset_BiVib = pd.read_pickle(BiVib_pkl_path)
+        self.dataset = self.dataset.append(dataset_BiVib)
+
+    def load_MAPS(self, note_range, set_velocity):
         # Types of each piano
         inst_types = {"AkPnBcht": "Grand",
                       "AkPnBsdf": "Grand",
@@ -98,6 +118,15 @@ class InstrumentLoader:
                             start_time = txt[1, 0]
                             end_time = txt[1, 1]
                             pitch = int(txt[1, 2])
+
+                            # Check that pitch falls in the specified range
+                            if note_range is not None:
+                                if not (note_range[0] <= pitch <= note_range[1]):
+                                    continue
+                            # Check that velocities match that specified
+                            if set_velocity is not None:
+                                if velocity != set_velocity:
+                                    continue
 
                             # Assume 44.1kHz sampling rate
                             Fs = 44100
@@ -203,41 +232,60 @@ class InstrumentLoader:
             #     # Reset read pointer
             #     wavfile.seek(0)
 
-    def load_BiVib(self, label):
+    def load_BiVib(self, note_range, set_velocity):
         data = pd.DataFrame()
         extracted_path = os.path.join(self.data_dir, "BiVib", "extracted")
-        label_subpath = os.path.join(extracted_path, label)
-        for instrument_type in os.listdir(label_subpath):
-            for filename in os.listdir(os.path.join(label_subpath, instrument_type)):
-                file_path = os.path.join(label_subpath, instrument_type, filename)
-                print("Reading file", file_path)
-                sample_name = os.path.splitext(filename)[0]
-                note_name = sample_name.split("_")[0]
-                pitch = librosa.note_to_midi(note_name)
-                velocity = sample_name.split("_")[1]
-                sustain = 0
+        sustain = 0 # all samples are played without sustain pedal
+        for label in ["Upright", "Grand"]:
+            label_subpath = os.path.join(extracted_path, label)
+            for instrument_type in os.listdir(label_subpath):
+                for filename in os.listdir(os.path.join(label_subpath, instrument_type)):
+                    file_path = os.path.join(label_subpath, instrument_type, filename)
+                    print("Reading file", file_path)
+                    sample_name = os.path.splitext(filename)[0]
+                    note_name = sample_name.split("_")[0]
+                    pitch = librosa.note_to_midi(note_name)
+                    velocity_midi = int(sample_name.split("_")[1])
+                    if velocity_midi < 56:
+                        velocity = "P"
+                    elif 56 <= velocity_midi <= 78:
+                        velocity = "M"
+                    else:
+                        velocity = "F"
 
-                # BiVib is 96kHz 24 bit int but we want to convert to CD quality 44100 Hz int16
-                #audio_data, Fs = librosa.load(file_path, mono=True, sr=None, dtype="int16")
-                audio_data, orig_Fs = soundfile.read(file_path, dtype="int16")
-                # Convert from stereo to mono by summing channels.
-                # The division and sum are performed as float64 to prevent overflow and truncation
-                audio_data = np.sum(audio_data/2, axis=1)
-                # Resample to 44.1kHz. scipy.signal.resample may be faster, uses Fourier domain
-                Fs = 44100
-                audio_data = librosa.resample(audio_data.astype(float), orig_Fs, Fs).astype("int16")
+                    # Check that pitch falls in the specified range
+                    if note_range is not None:
+                        if not (note_range[0] <= pitch <= note_range[1]):
+                            continue
+                    # Check that velocities match those specified
+                    if set_velocity is not None:
+                        if velocity != set_velocity:
+                            continue
 
-                # Append to dataframe
-                sample_row = pd.DataFrame({"dataset": pd.Series(["BiVib"], dtype="category"),
-                                           "instrument": pd.Series([str(instrument_type)], dtype="category"),
-                                           "waveform": [audio_data],
-                                           "Fs": pd.Series([Fs], dtype="category"),
-                                           "pitch": pd.Series([pitch], dtype="int8"),
-                                           "velocity": pd.Series([velocity], dtype="int8"),
-                                           "sustain": pd.Series([sustain], dtype=bool),
-                                           "label": pd.Series([label], dtype="category")})
-                sample_row.index = pd.Index([sample_name], name="filename")
-                data = data.append(sample_row)
+                    # BiVib is 96kHz 24 bit int but we want to convert to CD quality 44100 Hz int16
+                    #audio_data, Fs = librosa.load(file_path, mono=True, sr=None, dtype="int16")
+                    audio_data, orig_Fs = soundfile.read(file_path, dtype="int16")
+                    # Convert from stereo to mono by summing channels.
+                    # The division and sum are performed as float64 to prevent overflow and truncation
+                    audio_data = np.sum(audio_data/2, axis=1)
+                    # Resample to 44.1kHz. scipy.signal.resample may be faster, uses Fourier domain
+                    Fs = 44100
+                    audio_data = librosa.resample(audio_data.astype(float), orig_Fs, Fs).astype("int32")
+                    # Crop to 2.1s to match MAPS lengths, since BiVib holds note until it dies out while MAPS releases after about 2.1s
+                    if len(audio_data) > 97285:
+                        audio_data = audio_data[:97285]
+
+                    # Append to dataframe
+                    sample_row = pd.DataFrame({"dataset": pd.Series(["BiVib"], dtype="category"),
+                                               "instrument": pd.Series([str(instrument_type)], dtype="category"),
+                                               "waveform": [audio_data],
+                                               "Fs": pd.Series([Fs], dtype="category"),
+                                               "pitch": pd.Series([pitch], dtype="int8"),
+                                               "velocity": pd.Series([velocity], dtype="category"),
+                                               "sustain": pd.Series([sustain], dtype=bool),
+                                               "label": pd.Series([label], dtype="category")})
+                    sample_row.index = pd.Index([sample_name], name="filename")
+                    data = data.append(sample_row)
         return data
 
     def stack_velocities(self, data):
@@ -266,102 +314,126 @@ class InstrumentLoader:
                                            "label": label}, index=[0]))
         return out
 
-    def preprocess(self,   # STFT and mel-spectrogram parameters assuming Fs=44100:
+    def preprocess(self,                # STFT and mel-spectrogram parameters assuming Fs=44100:
                    n_fft=2048,              # 46 ms STFT frame length
                    win_length=0.025,        # 25 ms spectrogram frame length, 0-padded to apply STFT over 46 ms
                    window_spacing=0.010,    # 10 ms hop size between windows
                    window="hamming",
-                   n_mels=80,               # No. of mel filter bank bands - chosen as a hyper-parameter
-                   fmin=0, fmax=None,       # 70-7000 Hz is piano's perceptible range
-                   vel_stack=True, crop=False, pad=True):
+                   n_mels=300,              # No. of mel filter bank bands (y-axis resolution) - hyper-parameter
+                   fmin=0, fmax=None,       # 20-8000 Hz is piano's perceptible range
+                                            #  results in 300 bins, each 66.6 Hz wide (NO NOT LINEAR SINCE MEL SCALE - Plot the mel filter)
+                   vel_stack=False, crop=False, pad=True,
+                   normalisation=None,
+                   plot=False):
+        if not os.path.isfile(melspec_pkl_path):
+            print(melspec_pkl_path, "not found, pre-processing dataset manually")
 
-        max_len = len(max(self.dataset["waveform"], key=len))
+            max_len = len(max(self.dataset["waveform"], key=len))
+            spec_params = {"Fs": 44100, # NOTE: this is the waveform's sample rate, not the spectrogram framerate.
+                                        # We assume this is always 44100Hz for the purposes of plotting
+                           "framerate": 1 / window_spacing,
+                           "fmin": fmin,
+                           "fmax": fmax}
 
-        out = pd.DataFrame()
-        for i, sample in self.dataset.iterrows():
-            waveform = sample["waveform"]
-            Fs = sample["Fs"]
-            if pad:
-                # 0-pad waveforms to the maximum waveform length in the dataset
-                waveform = np.pad(waveform, (0, max_len-len(waveform)))
-            if fmax is None:
-                # Use Nyquist frequency if no max frequency is specified
-                fmax = Fs/2
-            melspec = librosa.feature.melspectrogram(waveform, Fs,
-                                                     n_fft=n_fft,                   # Samples per STFT frame
-                                                     win_length=int(win_length*Fs), # Samples per 0-padded spec window
-                                                     hop_length=int(window_spacing*Fs), # No. of samples between windows
-                                                     window=window,                 # Window type
-                                                     n_mels=n_mels,                 # No. of mel freq bins
-                                                     fmin=fmin, fmax=fmax)
-            # DEBUG: Plot mel filter bank used to generate the mel spectrogram
-            # mel_basis = librosa.filters.mel(sample["Fs"], n_fft, n_mels=n_mels, fmin=fmin, fmax=fmax)
-            # fig, ax = plt.subplots()
-            # img = librosa.display.specshow(mel_basis, x_axis='linear', y_axis="mel", ax=ax, sr=sample["Fs"], fmin=fmin, fmax=fmax)
-            # ax.set(ylabel='Mel filter', title='Mel filter bank')
-            # fig.colorbar(img, ax=ax)
-            # plt.show()
+            out = pd.DataFrame()
+            for i, sample in self.dataset.iterrows():
+                waveform = sample["waveform"]
+                Fs = sample["Fs"]
 
-            # Convert to log power scale
-            melspec = librosa.power_to_db(melspec, ref=np.max)
-            # Temporary solution: remove last few samples to make all spectrograms square and the same length
-            if crop:
-                melspec = melspec[:, :172]
+                # Convert from int32 to float32 between -1 and 1 for librosa processing
+                if waveform.dtype == "int32":
+                    waveform = np.array([np.float32((s >> 1) / (32768.0)) for s in waveform])
+                if pad:
+                    # 0-pad waveforms to the maximum waveform length in the dataset
+                    waveform = np.pad(waveform, (0, max_len-len(waveform)))
+                if fmax is None:
+                    # Use Nyquist frequency if no max frequency is specified
+                    fmax = Fs/2
+                melspec = librosa.feature.melspectrogram(waveform, Fs,
+                                                         n_fft=n_fft,                   # Samples per STFT frame
+                                                         win_length=int(win_length*Fs), # Samples per 0-padded spec window
+                                                         hop_length=int(window_spacing*Fs), # No. of samples between windows
+                                                         window=window,                 # Window type
+                                                         n_mels=n_mels,                 # No. of mel freq bins
+                                                         fmin=fmin, fmax=fmax)
+                # DEBUG: Plot mel filter bank used to generate the mel spectrogram
+                # mel_basis = librosa.filters.mel(sample["Fs"], n_fft, n_mels=n_mels, fmin=fmin, fmax=fmax)
+                # fig, ax = plt.subplots()
+                # img = librosa.display.specshow(mel_basis, x_axis='linear', y_axis="mel", ax=ax, sr=sample["Fs"], fmin=fmin, fmax=fmax)
+                # ax.set(ylabel='Mel filter', title='Mel filter bank')
+                # fig.colorbar(img, ax=ax)
+                # plt.show()
 
-            # Convert labels to binary, "Grand" = 0, "Upright" = 1
-            if sample["label"] == "Grand":
-                label = 0
-            if sample["label"] == "Upright":
-                label = 1
+                # Convert to log power scale
+                melspec = librosa.power_to_db(melspec, ref=np.max)
+                # Temporary solution: remove last few samples to make all spectrograms square and the same length
+                if crop:
+                    melspec = melspec[:, :172]
 
-            spec_row = pd.DataFrame({"dataset": sample["dataset"],
-                                     "instrument": sample["instrument"],
-                                     "spectrogram": [melspec],
-                                     "framerate": 1/window_spacing,
-                                     "pitch": sample["pitch"],
-                                     "velocity": sample["velocity"],
-                                     "sustain": sample["sustain"],
-                                     "label": label})
-            spec_row.index = pd.Index([sample.name], name="filename")
-            out = out.append(spec_row)
-        if vel_stack:
-            out = self.stack_velocities(out)
+                if plot:
+                    plot_spectrogram(melspec, spec_params, name=str(sample.name))
+
+                if normalisation == "statistics":
+                    melspec = (melspec - np.mean(melspec))/np.std(melspec)
+
+                # Magnitude-normalise spectrogram by dividing by the fundamental frequency's magnitude
+                elif normalisation == "fundamental":
+                    mel_freq_axis = librosa.mel_frequencies(n_mels=n_mels,fmin=fmin,fmax=fmax)
+
+                    # Use the magnitude of the bin containing the fundamental frequency (with center nearest to fundamental)
+                    fundamental_freq = librosa.core.midi_to_hz(sample["pitch"])
+                    fundamental_bin_index = (np.abs(mel_freq_axis - fundamental_freq)).argmin()
+                    # Divide by peak magnitude
+                    fundamental_bin_mag = np.max(melspec[fundamental_bin_index, :])
+                    print("Nearest bin to the fundamental is at", mel_freq_axis[fundamental_bin_index],
+                          "Hz, with peak magnitude", fundamental_bin_mag)
+                    melspec = melspec/fundamental_bin_mag
+
+                # Convert labels to binary, "Grand" = 0, "Upright" = 1
+                if sample["label"] == "Grand":
+                    label = 0
+                if sample["label"] == "Upright":
+                    label = 1
+
+                spec_row = pd.DataFrame({"dataset": sample["dataset"],
+                                         "instrument": sample["instrument"],
+                                         "spectrogram": [melspec],
+                                         "pitch": sample["pitch"],
+                                         "velocity": sample["velocity"],
+                                         "sustain": sample["sustain"],
+                                         "label": label})
+                spec_row.index = pd.Index([sample.name], name="filename")
+                out = out.append(spec_row)
+            if vel_stack:
+                out = self.stack_velocities(out)
+            out.to_pickle(melspec_pkl_path)
+            print("Pre-processed mel-spectrograms saved to", melspec_pkl_path)
+        else:
+            print("Loading pickle from", melspec_pkl_path)
+            out = pd.read_pickle(melspec_pkl_path)
+
         return out
 
 
+def plot_spectrogram(spectrogram, spec_params, name=""):
+    fig, ax = plt.subplots()
+    img = librosa.display.specshow(spectrogram, x_axis='s', y_axis='mel', ax=ax,
+                                   sr=spec_params["Fs"],
+                                   hop_length=int(spec_params["Fs"]/spec_params["framerate"]),
+                                   fmin=spec_params["fmin"],
+                                   fmax=spec_params["fmax"])
+    fig.colorbar(img, ax=ax, format='%+2.0f dB')
+    ax.set(title='Mel-frequency spectrogram: '+name)
+    plt.show()
+
+
 if __name__ == '__main__':
-    loader = InstrumentLoader(data_dir)
+    loader = InstrumentLoader(data_dir, note_range=[48, 72], set_velocity="M")
 
     upright_count = len(loader.dataset.loc[loader.dataset['label'] == "Upright"])
     grand_count = len(loader.dataset.loc[loader.dataset['label'] == "Grand"])
 
     # Shape: (3, 172, 172) like a 3-channel 2D image, with velocities encoded in the channels
     #melspec_MAPS = loader.preprocess(dataset_MAPS, n_fft=2048, window_spacing=0.5, window="hamming", n_mels=172, vel_stack=False, crop=False)#, fmin=70, fmax=7000)
-    # Shape: (3, 80, 222)
-    melspec_MAPS = loader.preprocess()
-
-    # Plot spectrogram of one sample for illustrative purposes
-    # test_sample = melspec_MAPS.iloc[0]
-    # fig, ax = plt.subplots()
-    # img = librosa.display.specshow(test_sample["spectrogram"], x_axis='time', y_axis='mel', sr=test_sample["Fs"], ax=ax,
-    #                                fmin=0, fmax=test_sample["Fs"]/2)
-    # fig.colorbar(img, ax=ax, format='%+2.0f dB')
-    # ax.set(title='Mel-frequency spectrogram')
-    # plt.show()
-    # print("end")
-
-    for label in ["Upright"]:
-        BiVib_pkl_path = os.path.join(data_dir, "BiVib", "BiVib_"+label+".feather")
-        if not os.path.isfile(BiVib_pkl_path):
-            print(BiVib_pkl_path, "not found, loading dataset manually")
-            dataset_BiVib = pd.DataFrame([1,2])#loader.load_BiVib(label)
-            gc.collect()
-            with open(BiVib_pkl_path, "wb") as dumpfile:
-                feather.write_dataframe(dataset_BiVib, dumpfile)
-            print("Pickle saved as", BiVib_pkl_path)
-        else:
-            print("Loading pickle from", BiVib_pkl_path)
-            dataset_BiVib = feather.read_dataframe(open(BiVib_pkl_path, "rb"))
-    print("Done")
+    melspec_data = loader.preprocess(fmin=20, fmax=20000, n_mels=300, normalisation="statistics", plot=False)
     print("")
-    print("ok")
