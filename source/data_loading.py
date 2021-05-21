@@ -33,23 +33,6 @@ class TimbreDataset(Dataset):
         return row.spectrogram, row.label
 
 
-def generate_set_indices(data_len, partition_ratios=None, seed=42):
-    # make a random set of shuffled indices for sampling training/test sets randomly w/o overlap
-    if partition_ratios is None:
-        partition_ratios = [0.8, 0.1]
-    # Reproducible random shuffle of indices, using a fixed seed
-    indices = np.arange(data_len)
-    rng = np.random.default_rng(seed=seed)
-    rng.shuffle(indices)
-
-    split_point_train = int(data_len * partition_ratios[0])
-    split_point_val = split_point_train + int(data_len * partition_ratios[1])
-    indices_train = indices[:split_point_train]
-    indices_val = indices[split_point_train:split_point_val]
-    indices_test = indices[split_point_val:]
-    return indices_train, indices_val, indices_test
-
-
 class InstrumentLoader:
     def __init__(self, data_dir, note_range=None, set_velocity=None):
         # midi_range, if specified, restricts the notes used in the dataset
@@ -334,6 +317,28 @@ class InstrumentLoader:
                            "framerate": 1 / window_spacing,
                            "fmin": fmin,
                            "fmax": fmax}
+            # Plot mel filter bank used to generate the mel spectrogram
+            plt.figure(figsize=(10, 12))
+            plt.subplot(2, 1, 1)
+            filterbank = librosa.filters.mel(spec_params["Fs"], n_fft, n_mels=n_mels, fmin=fmin, fmax=fmax, norm=None)
+            img = librosa.display.specshow(filterbank, x_axis='linear', y_axis="mel", sr=spec_params["Fs"], fmin=fmin, fmax=fmax)
+            plt.xlabel("STFT Frequencies (Hz)")
+            plt.ylabel('Mel filter frequencies (Hz)')
+            plt.title('Mel filter bank')
+            plt.colorbar(img, label="Filter Magnitude")
+            # Plotting each triangular filter's reponse:
+            #  reference: https://stackoverflow.com/questions/40197060/librosa-mel-filter-bank-decreasing-triangles
+            plt.subplot(2, 1, 2)
+            selected_bank_indices = np.linspace(start=0, stop=n_mels-1, num=75, dtype=int)
+            for i in selected_bank_indices:
+                plt.plot(np.linspace(fmin, fmax, int((n_fft/2)+1)), filterbank[i])
+            #plt.legend(labels=selected_bank_indices)
+            plt.title("Frequency response of selected normalised Mel bank filters")
+            plt.ylim([0.00001, None])
+            plt.xlim([0, 18500])
+            plt.xlabel("Frequency (Hz)")
+            plt.ylabel("Magnitude")
+            plt.show()
 
             out = pd.DataFrame()
             for i, sample in self.dataset.iterrows():
@@ -356,13 +361,6 @@ class InstrumentLoader:
                                                          window=window,                 # Window type
                                                          n_mels=n_mels,                 # No. of mel freq bins
                                                          fmin=fmin, fmax=fmax)
-                # DEBUG: Plot mel filter bank used to generate the mel spectrogram
-                # mel_basis = librosa.filters.mel(sample["Fs"], n_fft, n_mels=n_mels, fmin=fmin, fmax=fmax)
-                # fig, ax = plt.subplots()
-                # img = librosa.display.specshow(mel_basis, x_axis='linear', y_axis="mel", ax=ax, sr=sample["Fs"], fmin=fmin, fmax=fmax)
-                # ax.set(ylabel='Mel filter', title='Mel filter bank')
-                # fig.colorbar(img, ax=ax)
-                # plt.show()
 
                 # Convert to log power scale
                 melspec = librosa.power_to_db(melspec, ref=np.max)
@@ -433,7 +431,6 @@ if __name__ == '__main__':
     upright_count = len(loader.dataset.loc[loader.dataset['label'] == "Upright"])
     grand_count = len(loader.dataset.loc[loader.dataset['label'] == "Grand"])
 
-    # Shape: (3, 172, 172) like a 3-channel 2D image, with velocities encoded in the channels
-    #melspec_MAPS = loader.preprocess(dataset_MAPS, n_fft=2048, window_spacing=0.5, window="hamming", n_mels=172, vel_stack=False, crop=False)#, fmin=70, fmax=7000)
+    # Shape: (1, 300, 221)
     melspec_data = loader.preprocess(fmin=20, fmax=20000, n_mels=300, normalisation="statistics", plot=False)
     print("")
