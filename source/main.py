@@ -79,7 +79,7 @@ def generate_split_indices(data, partition_ratios=None, mode="mixed", seed=42):
 
 def train_model(train_set, val_set):
     print("\n--------------TRAINING MODEL--------------")
-    model = TimbreCNN()
+    model = TimbreCNN().to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
 
     with torch.enable_grad():
@@ -90,8 +90,8 @@ def train_model(train_set, val_set):
         for epoch in range(epochs):
             running_loss = 0.0
             for i, batch in enumerate(train_set):
-                x = batch[0].float()
-                label = batch[1].float()
+                x = batch[0].float().to(device)
+                label = batch[1].float().to(device)
 
                 optimizer.zero_grad()
                 y = model(x)
@@ -109,8 +109,8 @@ def train_model(train_set, val_set):
                 loss_val = 0
                 with torch.no_grad():
                     for i, batch in enumerate(val_set):
-                        x = batch[0].float()
-                        label = batch[1].float()
+                        x = batch[0].float().to(device)
+                        label = batch[1].float().to(device)
                         y = model(x)
                         loss_val += loss_function(y, label).item()
                 print("\t+Validation - Epoch", epoch + 1, "loss:", loss_val / (batch_size * (i + 1)))
@@ -137,16 +137,17 @@ def evaluate_CNN(evaluated_model, test_set):
     with torch.no_grad():
         # Inference mode
         evaluated_model.train(False)
+        evaluated_model = evaluated_model.to(device)
 
         for batch in test_set:
-            x = batch[0].float()
-            label = batch[1].float()
+            x = batch[0].float().to(device)
+            label = batch[1].float().to(device)
             y = evaluated_model(x)
             print("+Evaluating - Batch loss:", loss_function(y, label).item())
             pred = torch.round(y)
             # Accumulate per-batch ground truths and outputs
-            labels_acc = np.append(labels_acc, label)
-            preds_acc = np.append(preds_acc, pred)
+            labels_acc = np.append(labels_acc, label.cpu())
+            preds_acc = np.append(preds_acc, pred.cpu())
 
     return evaluate_scores(labels_acc, preds_acc)
 
@@ -183,6 +184,12 @@ def cross_validate(total_train_set):
 
 
 if __name__ == '__main__':
+    # Configure CPU or GPU using CUDA if available
+    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    print('Device:', device)
+    if torch.cuda.is_available():
+        print("GPU:", torch.cuda.get_device_name(0))
+
     print("\n----------------LOADING DATA----------------")
     loader = InstrumentLoader(data_dir, note_range=[48, 72], set_velocity="M")
 
