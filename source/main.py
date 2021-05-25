@@ -14,7 +14,7 @@ learning_rate = 0.001
 loss_function = nn.BCELoss()
 
 
-def generate_split_indices(data, partition_ratios=None, mode="mixed", seed=42):
+def generate_split_indices(data, partition_ratios=None, mode="mixed", seed=None):
     # Make a random set of shuffled indices for sampling training/test sets randomly w/o overlap
     if partition_ratios is None:
         partition_ratios = [0.8, 0.1]
@@ -28,18 +28,26 @@ def generate_split_indices(data, partition_ratios=None, mode="mixed", seed=42):
         indices_train = []
         indices_val = []
         indices_test = []
+        no_more_instruments = False
         # Iterate through instruments and add them to the training/validation set indices until ratios are reached
-        while np.round(len(indices_train)/len(data)) < partition_ratios[0]:
-            indices_train = np.append(indices_train, np.where((data.instrument == instruments[i])))
+        next_instrument_indices = np.asarray(data.instrument == instruments[i]).nonzero()[0]
+        while (len(indices_train) + len(next_instrument_indices))/len(data) <= partition_ratios[0]:
+            indices_train = np.append(indices_train, next_instrument_indices)
             i += 1
-        while np.round(len(indices_val)/len(data), 1) < partition_ratios[1]:
-            indices_val = np.append(indices_val, np.where((data.instrument == instruments[i])))
+            if i >= len(instruments):
+                no_more_instruments = True
+                break
+            next_instrument_indices = np.asarray(data.instrument == instruments[i]).nonzero()[0]
+        while (len(indices_train) + len(indices_val) + len(next_instrument_indices))/len(data) \
+                <= partition_ratios[0] + partition_ratios[1] \
+                and not no_more_instruments:
+            indices_val = np.append(indices_val, next_instrument_indices)
             i += 1
+            if i >= len(instruments):
+                break
+            next_instrument_indices = np.asarray(data.instrument == instruments[i]).nonzero()[0]
         for j in range(i, len(instruments)):
-            indices_test = np.append(indices_test, np.where((data.instrument == instruments[j])))
-        rng.shuffle(indices_train)
-        rng.shuffle(indices_val)
-        rng.shuffle(indices_test)
+            indices_test = np.append(indices_test, np.asarray(data.instrument == instruments[j]).nonzero())
         print("")
     elif mode == "mixed":
         # Reproducible random shuffle of indices, using a fixed seed
@@ -63,8 +71,12 @@ def generate_split_indices(data, partition_ratios=None, mode="mixed", seed=42):
     print(len(indices_test), "test samples")
     train_class_balance = data.iloc[indices_train].label.sum(axis=0)/len(indices_train)
     print("Train set contains", np.round(train_class_balance * 100), "% Upright pianos")
+    if mode == "segment_instruments":
+        print("\t", pd.unique(data.iloc[indices_train].instrument))
     val_class_balance = data.iloc[indices_val].label.sum(axis=0)/len(indices_val)
     print("Validation set contains", np.round(val_class_balance * 100), "% Upright pianos")
+    if mode == "segment_instruments":
+        print("\t", pd.unique(data.iloc[indices_val].instrument))
     if len(indices_test) == 0:
         print("Warning: Test set is empty")
         indices_test = np.array([])
@@ -73,7 +85,8 @@ def generate_split_indices(data, partition_ratios=None, mode="mixed", seed=42):
         indices_test = indices_test.astype(int)
         test_class_balance = data.iloc[indices_test].label.sum(axis=0)/len(indices_test)
         print("Test set contains", np.round(test_class_balance * 100), "% Upright pianos")
-
+        if mode == "segment_instruments":
+            print("\t", pd.unique(data.iloc[indices_test].instrument))
     return indices_train, indices_val, indices_test
 
 
@@ -196,7 +209,7 @@ if __name__ == '__main__':
     data = loader.preprocess(fmin=20, fmax=20000, n_mels=300, normalisation="statistics")
 
     dataset = TimbreDataset(data)
-    train_indices, val_indices, test_indices = generate_split_indices(data, partition_ratios=[0.75, 0.15],
+    train_indices, val_indices, test_indices = generate_split_indices(data, partition_ratios=[0.8, 0.1],
                                                                       mode="segment_instruments")
     loader_train = DataLoader(dataset, batch_size=batch_size, shuffle=False,
                               sampler=sampler.SubsetRandomSampler(train_indices))
@@ -223,4 +236,3 @@ if __name__ == '__main__':
     print("Confusion matrix:\n", scores["Confusion"])
     print("Accuracy:", np.round(scores["Accuracy"], 2))
     print("F1 score:", np.round(scores["F1"], 2))
-    print(scores)

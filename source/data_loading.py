@@ -128,15 +128,6 @@ class InstrumentLoader:
                             sample_row = pd.DataFrame([["MAPS", inst_name, audio_data, Fs, pitch, velocity, sustain, label]],
                                                       index=pd.Index([sample_name], name="filename"),
                                                       columns=["dataset", "instrument", "waveform", "Fs", "pitch", "velocity", "sustain", "label"])
-                            # sample_row = pd.DataFrame({"dataset": pd.Series(["MAPS"], dtype="category"),
-                            #                            "instrument": pd.Series([str(inst_name)], dtype="category"),
-                            #                            "waveform": [audio_data],
-                            #                            "Fs": pd.Series([Fs], dtype="category"),
-                            #                            "pitch": pd.Series([pitch], dtype="int8"),
-                            #                            "velocity": pd.Series([velocity], dtype="category"),
-                            #                            "sustain": pd.Series([sustain], dtype=bool),
-                            #                            "label": pd.Series([label], dtype="category")})
-                            # sample_row.index = pd.Index([sample_name], name="filename")
 
                             data = data.append(sample_row)
                     print("Loaded", inst_name)
@@ -303,10 +294,9 @@ class InstrumentLoader:
                    window_spacing=0.010,    # 10 ms hop size between windows
                    window="hamming",
                    n_mels=300,              # No. of mel filter bank bands (y-axis resolution) - hyper-parameter
-                   fmin=0, fmax=None,       # 20-8000 Hz is piano's perceptible range
-                                            #  results in 300 bins, each 66.6 Hz wide (NO NOT LINEAR SINCE MEL SCALE - Plot the mel filter)
-                   vel_stack=False, crop=False, pad=True,
-                   normalisation=None,
+                   fmin=20, fmax=20000,     # 20-8000 Hz is piano's perceptible range
+                   vel_stack=False, pad=True,
+                   normalisation="statistics",
                    plot=False):
         if not os.path.isfile(melspec_pkl_path):
             print(melspec_pkl_path, "not found, pre-processing dataset manually")
@@ -316,82 +306,53 @@ class InstrumentLoader:
                                         # We assume this is always 44100Hz for the purposes of plotting
                            "framerate": 1 / window_spacing,
                            "fmin": fmin,
-                           "fmax": fmax}
+                           "fmax": fmax,
+                           "n_fft": n_fft,
+                           "n_mels": n_mels}
             # Plot mel filter bank used to generate the mel spectrogram
-            plt.figure(figsize=(10, 12))
-            plt.subplot(2, 1, 1)
-            filterbank = librosa.filters.mel(spec_params["Fs"], n_fft, n_mels=n_mels, fmin=fmin, fmax=fmax, norm=None)
-            img = librosa.display.specshow(filterbank, x_axis='linear', y_axis="mel", sr=spec_params["Fs"], fmin=fmin, fmax=fmax)
-            plt.xlabel("STFT Frequencies (Hz)")
-            plt.ylabel('Mel filter frequencies (Hz)')
-            plt.title('Mel filter bank')
-            plt.colorbar(img, label="Filter Magnitude")
-            # Plotting each triangular filter's reponse:
-            #  reference: https://stackoverflow.com/questions/40197060/librosa-mel-filter-bank-decreasing-triangles
-            plt.subplot(2, 1, 2)
-            selected_bank_indices = np.linspace(start=0, stop=n_mels-1, num=75, dtype=int)
-            for i in selected_bank_indices:
-                plt.plot(np.linspace(fmin, fmax, int((n_fft/2)+1)), filterbank[i])
-            #plt.legend(labels=selected_bank_indices)
-            plt.title("Frequency response of selected normalised Mel bank filters")
-            plt.ylim([0.00001, None])
-            plt.xlim([0, 18500])
-            plt.xlabel("Frequency (Hz)")
-            plt.ylabel("Magnitude")
-            plt.show()
+            plot_filterbank(spec_params)
 
             out = pd.DataFrame()
             for i, sample in self.dataset.iterrows():
                 waveform = sample["waveform"]
                 Fs = sample["Fs"]
 
-                # Convert from int32 to float32 between -1 and 1 for librosa processing
-                if waveform.dtype == "int32":
-                    waveform = np.array([np.float32((s >> 1) / (32768.0)) for s in waveform])
-                if pad:
-                    # 0-pad waveforms to the maximum waveform length in the dataset
-                    waveform = np.pad(waveform, (0, max_len-len(waveform)))
                 if fmax is None:
                     # Use Nyquist frequency if no max frequency is specified
                     fmax = Fs/2
-                melspec = librosa.feature.melspectrogram(waveform, Fs,
-                                                         n_fft=n_fft,                   # Samples per STFT frame
-                                                         win_length=int(win_length*Fs), # Samples per 0-padded spec window
-                                                         hop_length=int(window_spacing*Fs), # No. of samples between windows
-                                                         window=window,                 # Window type
-                                                         n_mels=n_mels,                 # No. of mel freq bins
-                                                         fmin=fmin, fmax=fmax)
 
-                # Convert to log power scale
-                melspec = librosa.power_to_db(melspec, ref=np.max)
-                # Temporary solution: remove last few samples to make all spectrograms square and the same length
-                if crop:
-                    melspec = melspec[:, :172]
-
-                if plot:
-                    plot_spectrogram(melspec, spec_params, name=str(sample.name))
-
-                if normalisation == "statistics":
-                    melspec = (melspec - np.mean(melspec))/np.std(melspec)
-
-                # Magnitude-normalise spectrogram by dividing by the fundamental frequency's magnitude
-                elif normalisation == "fundamental":
-                    mel_freq_axis = librosa.mel_frequencies(n_mels=n_mels,fmin=fmin,fmax=fmax)
-
-                    # Use the magnitude of the bin containing the fundamental frequency (with center nearest to fundamental)
-                    fundamental_freq = librosa.core.midi_to_hz(sample["pitch"])
-                    fundamental_bin_index = (np.abs(mel_freq_axis - fundamental_freq)).argmin()
-                    # Divide by peak magnitude
-                    fundamental_bin_mag = np.max(melspec[fundamental_bin_index, :])
-                    print("Nearest bin to the fundamental is at", mel_freq_axis[fundamental_bin_index],
-                          "Hz, with peak magnitude", fundamental_bin_mag)
-                    melspec = melspec/fundamental_bin_mag
+                if pad:
+                    # 0-pad waveforms to the maximum waveform length in the dataset
+                    waveform = np.pad(waveform, (0, max_len-len(waveform)))
 
                 # Convert labels to binary, "Grand" = 0, "Upright" = 1
                 if sample["label"] == "Grand":
                     label = 0
                 if sample["label"] == "Upright":
                     label = 1
+
+                # Compute the log-mel spectrogram
+                melspec = compute_spectrogram(waveform, Fs, n_fft, win_length, window_spacing, window, n_mels, fmin, fmax)
+
+                # Normalise the spectrogram's magnitudes
+                if normalisation == "statistics":
+                    melspec = (melspec - np.mean(melspec)) / np.std(melspec)
+
+                elif normalisation == "fundamental":
+                    # Magnitude-normalise spectrogram by dividing by the fundamental frequency's magnitude
+                    mel_freq_axis = librosa.mel_frequencies(n_mels=n_mels, fmin=fmin, fmax=fmax)
+
+                    # Use the magnitude of the bin containing the fundamental frequency (center nearest to fundamental)
+                    fundamental_freq = librosa.core.midi_to_hz(sample["pitch"])
+                    fundamental_bin_index = (np.abs(mel_freq_axis - fundamental_freq)).argmin()
+                    # Divide by peak magnitude
+                    fundamental_bin_mag = np.max(melspec[fundamental_bin_index, :])
+                    print("Nearest bin to the fundamental is at", mel_freq_axis[fundamental_bin_index],
+                          "Hz, with peak magnitude", fundamental_bin_mag)
+                    melspec = melspec / fundamental_bin_mag
+
+                if plot:
+                    plot_spectrogram(melspec, spec_params, name=str(sample.name))
 
                 spec_row = pd.DataFrame({"dataset": sample["dataset"],
                                          "instrument": sample["instrument"],
@@ -411,6 +372,69 @@ class InstrumentLoader:
             out = pd.read_pickle(melspec_pkl_path)
 
         return out
+
+
+def compute_spectrogram(waveform, Fs,
+                        n_fft=2048,              # 46 ms STFT frame length
+                        win_length=0.025,        # 25 ms spectrogram frame length, 0-padded to apply STFT over 46 ms
+                        window_spacing=0.010,    # 10 ms hop size between windows
+                        window="hamming",
+                        n_mels=300,              # No. of mel filter bank bands (y-axis resolution) - hyper-parameter
+                        fmin=20, fmax=20000):
+    # Convert from int32 to float32 between -1 and 1 for librosa processing
+    if waveform.dtype == "int32":
+        waveform = np.array([np.float32((s >> 1) / (32768.0)) for s in waveform])
+
+    melspec = librosa.feature.melspectrogram(waveform, Fs,
+                                             n_fft=n_fft,  # Samples per STFT frame
+                                             win_length=int(win_length * Fs),  # Samples per 0-padded spec window
+                                             hop_length=int(window_spacing * Fs),  # No. of samples between windows
+                                             window=window,  # Window type
+                                             n_mels=n_mels,  # No. of mel freq bins
+                                             fmin=fmin, fmax=fmax)
+    # Convert to log power scale
+    melspec = librosa.power_to_db(melspec, ref=np.max)
+    return melspec
+
+
+def plot_filterbank(spec_params):
+    Fs = spec_params["Fs"]
+    n_fft = spec_params["n_fft"]
+    n_mels = spec_params["n_mels"]
+    fmin = spec_params["fmin"]
+    fmax = spec_params["fmax"]
+
+    filterbank = librosa.filters.mel(Fs, n_fft, n_mels=n_mels, fmin=fmin, fmax=fmax, norm=None)
+    # Plotting the frequency mapping of the filterbank
+    plt.figure(figsize=(10, 5))
+    img = librosa.display.specshow(filterbank, x_axis='linear', y_axis="mel", sr=Fs, fmin=fmin,
+                                   fmax=fmax)
+    plt.xlabel("STFT Frequencies (Hz)")
+    plt.ylabel('Mel filter frequencies (Hz)')
+    plt.title('Mel filter bank: frequency mapping and magnitude')
+    plt.colorbar(img, label="Filter Magnitude")
+    plt.show()
+
+    # Plotting each triangular filter's reponse:
+    #  reference: https://stackoverflow.com/questions/40197060/librosa-mel-filter-bank-decreasing-triangles
+    plt.figure(figsize=(10, 5))
+    plt.subplot(2, 1, 1)
+    plt.suptitle("Frequency response of the " + str(n_mels) + " Mel bank filters", size='x-large')
+    plt.subplots_adjust(hspace=0.5)
+    plt.plot(np.linspace(fmin, fmax, int((n_fft / 2) + 1)), filterbank.T)
+    plt.title("Detail: 5000 Hz to 7000 Hz")
+    plt.ylim([0.00001, None])
+    plt.xlim([5000, 7000])
+    plt.xlabel("Frequency (Hz)")
+    plt.ylabel("Magnitude")
+    plt.subplot(2, 1, 2)
+    plt.plot(np.linspace(fmin, fmax, int((n_fft / 2) + 1)), filterbank.T)
+    plt.title("Detail: 13000 Hz to 15000 Hz")
+    plt.ylim([0.00001, None])
+    plt.xlim([15000, 17000])
+    plt.xlabel("Frequency (Hz)")
+    plt.ylabel("Magnitude")
+    plt.show()
 
 
 def plot_spectrogram(spectrogram, spec_params, name=""):
