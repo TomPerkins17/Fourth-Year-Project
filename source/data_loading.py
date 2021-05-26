@@ -332,7 +332,7 @@ class InstrumentLoader:
                     label = 1
 
                 # Compute the log-mel spectrogram
-                melspec = compute_spectrogram(waveform, Fs, n_fft, win_length, window_spacing, window, n_mels, fmin, fmax)
+                melspec = compute_spectrogram(waveform, Fs, n_fft, win_length, window_spacing, window, n_mels, fmin, fmax, plot)
 
                 # Normalise the spectrogram's magnitudes
                 if normalisation == "statistics":
@@ -350,9 +350,6 @@ class InstrumentLoader:
                     print("Nearest bin to the fundamental is at", mel_freq_axis[fundamental_bin_index],
                           "Hz, with peak magnitude", fundamental_bin_mag)
                     melspec = melspec / fundamental_bin_mag
-
-                if plot:
-                    plot_spectrogram(melspec, spec_params, name=str(sample.name))
 
                 spec_row = pd.DataFrame({"dataset": sample["dataset"],
                                          "instrument": sample["instrument"],
@@ -380,7 +377,8 @@ def compute_spectrogram(waveform, Fs,
                         window_spacing=0.010,    # 10 ms hop size between windows
                         window="hamming",
                         n_mels=300,              # No. of mel filter bank bands (y-axis resolution) - hyper-parameter
-                        fmin=20, fmax=20000):
+                        fmin=20, fmax=20000,
+                        plot=False):
     # Convert from int32 to float32 between -1 and 1 for librosa processing
     if waveform.dtype == "int32":
         waveform = np.array([np.float32((s >> 1) / (32768.0)) for s in waveform])
@@ -394,6 +392,10 @@ def compute_spectrogram(waveform, Fs,
                                              fmin=fmin, fmax=fmax)
     # Convert to log power scale
     melspec = librosa.power_to_db(melspec, ref=np.max)
+
+    if plot:
+        plot_spectrogram(melspec, {"Fs": Fs, "framerate": 1/window_spacing, "fmin": fmin, "fmax": fmax})
+
     return melspec
 
 
