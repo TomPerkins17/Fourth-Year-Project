@@ -19,51 +19,63 @@ MAPS_pkl_path = os.path.join(pickle_dir, "MAPS", "MAPS.pkl")
 BiVib_pkl_path = os.path.join(pickle_dir, "BiVib", "BiVib.pkl")
 melspec_pkl_path = os.path.join(pickle_dir, "melspec_preprocessed.pkl")
 
+MAPS_pkl_path_normalisedwavs_M = os.path.join(pickle_dir, "MAPS", "MAPS_normalisedwavs_M.pkl")
+BiVib_pkl_path_normalisedwavs_M = os.path.join(pickle_dir, "BiVib", "BiVib_normalisedwavs_M.pkl")
+melspec_pkl_path_normalisedwavs_M = os.path.join(pickle_dir, "melspec_preprocessed_normalisedwavs_M.pkl")
 
-class TimbreDataset(Dataset):
-    # Class to handle dataframe like a torch dataset
-    def __init__(self, dataframe):
-        self.dataframe = dataframe
-
-    def __len__(self):
-        return len(self.dataframe)
-
-    def __getitem__(self, index):
-        row = self.dataframe.iloc[index]
-        return row.spectrogram, row.label
+MAPS_pkl_path_normalisedwavs = os.path.join(pickle_dir, "MAPS", "MAPS_normalisedwavs.pkl")
+BiVib_pkl_path_normalisedwavs = os.path.join(pickle_dir, "BiVib", "BiVib_normalisedwavs.pkl")
+melspec_pkl_path_normalisedwavs = os.path.join(pickle_dir, "melspec_preprocessed_normalisedwavs.pkl")
 
 
 class InstrumentLoader:
-    def __init__(self, data_dir, note_range=None, set_velocity=None):
+    def __init__(self, data_dir, note_range=None, set_velocity=None, normalise_wavs=False):
         # midi_range, if specified, restricts the notes used in the dataset
-        #   we will use C3 to C5 (2 octaves centred around middle C): MIDI 48-72
+        #   C3 to C5 (2 octaves centred around middle C): MIDI 48-72
         # velocity, if specified, restricts the velocities to medium
         self.data_dir = data_dir
         self.dataset = pd.DataFrame()
         self.note_range = note_range
         self.set_velocity = set_velocity
 
-        if not os.path.isfile(MAPS_pkl_path):
-            print(MAPS_pkl_path, "not found, loading dataset manually")
-            dataset_MAPS = self.load_MAPS(self.note_range, self.set_velocity)
-            dataset_MAPS.to_pickle(MAPS_pkl_path)
-            print("Pickle saved as", MAPS_pkl_path)
+        # Set up pickle filepaths for different versions of the dataset
+        if normalise_wavs:
+            if set_velocity is None:
+                MAPS_pkl = MAPS_pkl_path_normalisedwavs
+                BiVib_pkl = BiVib_pkl_path_normalisedwavs
+                self.melspec_pkl = melspec_pkl_path_normalisedwavs
+            elif set_velocity == "M":
+                MAPS_pkl = MAPS_pkl_path_normalisedwavs_M
+                BiVib_pkl = BiVib_pkl_path_normalisedwavs_M
+                self.melspec_pkl = melspec_pkl_path_normalisedwavs_M
+            else:
+                raise Exception("Paths not configured for set_velocity", set_velocity)
         else:
-            print("Loading pickle from", MAPS_pkl_path)
-            dataset_MAPS = pd.read_pickle(MAPS_pkl_path)
+            MAPS_pkl = MAPS_pkl_path
+            BiVib_pkl = BiVib_pkl_path
+            self.melspec_pkl = melspec_pkl_path
+
+        if not os.path.isfile(MAPS_pkl):
+            print(MAPS_pkl, "not found, loading dataset manually")
+            dataset_MAPS = self.load_MAPS(self.note_range, self.set_velocity, normalise=normalise_wavs)
+            dataset_MAPS.to_pickle(MAPS_pkl)
+            print("Pickle saved as", MAPS_pkl)
+        else:
+            print("Loading pickle from", MAPS_pkl)
+            dataset_MAPS = pd.read_pickle(MAPS_pkl)
         self.dataset = self.dataset.append(dataset_MAPS)
 
-        if not os.path.isfile(BiVib_pkl_path):
-            print(BiVib_pkl_path, "not found, loading dataset manually")
-            dataset_BiVib = self.load_BiVib(self.note_range, self.set_velocity)
-            dataset_BiVib.to_pickle(BiVib_pkl_path)
-            print("Pickle saved as", BiVib_pkl_path)
+        if not os.path.isfile(BiVib_pkl):
+            print(BiVib_pkl, "not found, loading dataset manually")
+            dataset_BiVib = self.load_BiVib(self.note_range, self.set_velocity, normalise=normalise_wavs)
+            dataset_BiVib.to_pickle(BiVib_pkl)
+            print("Pickle saved as", BiVib_pkl)
         else:
-            print("Loading pickle from", BiVib_pkl_path)
-            dataset_BiVib = pd.read_pickle(BiVib_pkl_path)
+            print("Loading pickle from", BiVib_pkl)
+            dataset_BiVib = pd.read_pickle(BiVib_pkl)
         self.dataset = self.dataset.append(dataset_BiVib)
 
-    def load_MAPS(self, note_range, set_velocity):
+    def load_MAPS(self, note_range, set_velocity, normalise):
         # Types of each piano
         inst_types = {"AkPnBcht": "Grand",
                       "AkPnBsdf": "Grand",
@@ -106,21 +118,21 @@ class InstrumentLoader:
                             if note_range is not None:
                                 if not (note_range[0] <= pitch <= note_range[1]):
                                     continue
-                            # Check that velocities match that specified
+                            # Check that velocities match those specified
                             if set_velocity is not None:
                                 if velocity != set_velocity:
                                     continue
 
-                            # Assume 44.1kHz sampling rate
+                            # MAPS has a 44.1kHz sampling rate
                             Fs = 44100
                             # Read waveform
                             wav_file_read = inst_zip.read(file)
-                            # audio_data_librosa, Fs = librosa.load(io.BytesIO(wav_file_read), mono=True, sr=None,
-                            #                               offset=start_time, duration=end_time-start_time)
                             # Load codec wav PCM s16le 44100Hz using int16 datatype
-                            # Fs, audio_data = wavfile.read(io.BytesIO(wav_file_read))
                             audio_data, Fs = soundfile.read(io.BytesIO(wav_file_read), dtype="int16",
                                                       start=int(start_time*Fs), stop=int(end_time*Fs))
+                            # Normalise amplitude to make volume uniform across different notes
+                            if normalise:
+                                audio_data = (32767*(audio_data/np.max(np.abs(audio_data)))).astype(np.int16)
                             # Sum to mono without dividing amplitude using 32 bits to prevent 16 bit overflow
                             audio_data = np.sum(audio_data.astype("int32"), axis=1)
 
@@ -128,7 +140,6 @@ class InstrumentLoader:
                             sample_row = pd.DataFrame([["MAPS", inst_name, audio_data, Fs, pitch, velocity, sustain, label]],
                                                       index=pd.Index([sample_name], name="filename"),
                                                       columns=["dataset", "instrument", "waveform", "Fs", "pitch", "velocity", "sustain", "label"])
-
                             data = data.append(sample_row)
                     print("Loaded", inst_name)
         return data
@@ -206,7 +217,7 @@ class InstrumentLoader:
             #     # Reset read pointer
             #     wavfile.seek(0)
 
-    def load_BiVib(self, note_range, set_velocity):
+    def load_BiVib(self, note_range, set_velocity, normalise):
         data = pd.DataFrame()
         extracted_path = os.path.join(self.data_dir, "BiVib", "extracted")
         sustain = 0 # all samples are played without sustain pedal
@@ -236,11 +247,13 @@ class InstrumentLoader:
                         if velocity != set_velocity:
                             continue
 
-                    # BiVib is 96kHz 24 bit int but we want to convert to CD quality 44100 Hz int16
-                    #audio_data, Fs = librosa.load(file_path, mono=True, sr=None, dtype="int16")
+                    # BiVib wavs are 96kHz 24 bit int, we want to convert to CD quality 44100 Hz int16
                     audio_data, orig_Fs = soundfile.read(file_path, dtype="int16")
+                    # Normalise amplitude to make volume uniform across different notes
+                    if normalise:
+                        audio_data = (32767 * (audio_data / np.max(np.abs(audio_data)))).astype(np.int16)
                     # Convert from stereo to mono by summing channels.
-                    # The division and sum are performed as float64 to prevent overflow and truncation
+                    #   Division and sum are performed as float64 to prevent overflow and truncation
                     audio_data = np.sum(audio_data/2, axis=1)
                     # Resample to 44.1kHz. scipy.signal.resample may be faster, uses Fourier domain
                     Fs = 44100
@@ -298,8 +311,8 @@ class InstrumentLoader:
                    vel_stack=False, pad=True,
                    normalisation="statistics",
                    plot=False):
-        if not os.path.isfile(melspec_pkl_path):
-            print(melspec_pkl_path, "not found, pre-processing dataset manually")
+        if not os.path.isfile(self.melspec_pkl):
+            print(self.melspec_pkl, "not found, pre-processing dataset manually")
 
             max_len = len(max(self.dataset["waveform"], key=len))
             spec_params = {"Fs": 44100, # NOTE: this is the waveform's sample rate, not the spectrogram framerate.
@@ -332,7 +345,7 @@ class InstrumentLoader:
                     label = 1
 
                 # Compute the log-mel spectrogram
-                melspec = compute_spectrogram(waveform, Fs, n_fft, win_length, window_spacing, window, n_mels, fmin, fmax, plot)
+                melspec = self.compute_spectrogram(waveform, Fs, n_fft, win_length, window_spacing, window, n_mels, fmin, fmax, plot)
 
                 # Normalise the spectrogram's magnitudes
                 if normalisation == "statistics":
@@ -362,41 +375,40 @@ class InstrumentLoader:
                 out = out.append(spec_row)
             if vel_stack:
                 out = self.stack_velocities(out)
-            out.to_pickle(melspec_pkl_path)
-            print("Pre-processed mel-spectrograms saved to", melspec_pkl_path)
+            out.to_pickle(self.melspec_pkl)
+            print("Pre-processed mel-spectrograms saved to", self.melspec_pkl)
         else:
-            print("Loading pickle from", melspec_pkl_path)
-            out = pd.read_pickle(melspec_pkl_path)
+            print("Loading pickle from", self.melspec_pkl)
+            out = pd.read_pickle(self.melspec_pkl)
 
         return out
 
+    def compute_spectrogram(self, waveform, Fs,
+                            n_fft=2048,              # 46 ms STFT frame length
+                            win_length=0.025,        # 25 ms spectrogram frame length, 0-padded to apply STFT over 46 ms
+                            window_spacing=0.010,    # 10 ms hop size between windows
+                            window="hamming",
+                            n_mels=300,              # No. of mel filter bank bands (y-axis resolution) - hyper-parameter
+                            fmin=20, fmax=20000,
+                            plot=False):
+        # Convert from int32 to float32 between -1 and 1 for librosa processing
+        if waveform.dtype == "int32":
+            waveform = np.array([np.float32((s >> 1) / (32768.0)) for s in waveform])
 
-def compute_spectrogram(waveform, Fs,
-                        n_fft=2048,              # 46 ms STFT frame length
-                        win_length=0.025,        # 25 ms spectrogram frame length, 0-padded to apply STFT over 46 ms
-                        window_spacing=0.010,    # 10 ms hop size between windows
-                        window="hamming",
-                        n_mels=300,              # No. of mel filter bank bands (y-axis resolution) - hyper-parameter
-                        fmin=20, fmax=20000,
-                        plot=False):
-    # Convert from int32 to float32 between -1 and 1 for librosa processing
-    if waveform.dtype == "int32":
-        waveform = np.array([np.float32((s >> 1) / (32768.0)) for s in waveform])
+        melspec = librosa.feature.melspectrogram(waveform, Fs,
+                                                 n_fft=n_fft,  # Samples per STFT frame
+                                                 win_length=int(win_length * Fs),  # Samples per 0-padded spec window
+                                                 hop_length=int(window_spacing * Fs),  # No. of samples between windows
+                                                 window=window,  # Window type
+                                                 n_mels=n_mels,  # No. of mel freq bins
+                                                 fmin=fmin, fmax=fmax)
+        # Convert to log power scale
+        melspec = librosa.power_to_db(melspec, ref=np.max)
 
-    melspec = librosa.feature.melspectrogram(waveform, Fs,
-                                             n_fft=n_fft,  # Samples per STFT frame
-                                             win_length=int(win_length * Fs),  # Samples per 0-padded spec window
-                                             hop_length=int(window_spacing * Fs),  # No. of samples between windows
-                                             window=window,  # Window type
-                                             n_mels=n_mels,  # No. of mel freq bins
-                                             fmin=fmin, fmax=fmax)
-    # Convert to log power scale
-    melspec = librosa.power_to_db(melspec, ref=np.max)
+        if plot:
+            plot_spectrogram(melspec, {"Fs": Fs, "framerate": 1/window_spacing, "fmin": fmin, "fmax": fmax})
 
-    if plot:
-        plot_spectrogram(melspec, {"Fs": Fs, "framerate": 1/window_spacing, "fmin": fmin, "fmax": fmax})
-
-    return melspec
+        return melspec
 
 
 def plot_filterbank(spec_params):
@@ -449,6 +461,19 @@ def plot_spectrogram(spectrogram, spec_params, name=""):
     fig.colorbar(img, ax=ax, format='%+2.0f dB')
     ax.set(title='Mel-frequency spectrogram: '+name)
     plt.show()
+
+
+class TimbreDataset(Dataset):
+    # Class to handle dataframe like a torch dataset
+    def __init__(self, dataframe):
+        self.dataframe = dataframe
+
+    def __len__(self):
+        return len(self.dataframe)
+
+    def __getitem__(self, index):
+        row = self.dataframe.iloc[index]
+        return row.spectrogram, row.label
 
 
 if __name__ == '__main__':

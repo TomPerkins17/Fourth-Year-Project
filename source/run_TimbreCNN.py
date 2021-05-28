@@ -3,9 +3,10 @@ from data_loading import *
 from timbre_CNN import *
 from evaluation import *
 from torch.utils.data import DataLoader, sampler
+from melody_loading import *
 
-saved_model_path = "model.pth"
-val_interval = 4
+saved_model_path = "model_velocityseg.pth"
+val_interval = 5
 
 # Hyperparameters
 batch_size = 128
@@ -20,7 +21,6 @@ def generate_split_indices(data, partition_ratios=None, mode="mixed", seed=None)
         partition_ratios = [0.8, 0.1]
     rng = np.random.default_rng(seed=seed)
     if mode == "segment_instruments":
-
         instruments = data.instrument.unique()
         rng.shuffle(instruments)
 
@@ -47,8 +47,17 @@ def generate_split_indices(data, partition_ratios=None, mode="mixed", seed=None)
                 break
             next_instrument_indices = np.asarray(data.instrument == instruments[i]).nonzero()[0]
         for j in range(i, len(instruments)):
-            indices_test = np.append(indices_test, np.asarray(data.instrument == instruments[j]).nonzero())
-        print("")
+            indices_test = np.append(indices_test, np.asarray(data.instrument == instruments[j]).nonzero()[0])
+        np.random.shuffle(indices_train)
+        np.random.shuffle(indices_val)
+        np.random.shuffle(indices_test)
+    elif mode == "segment_velocities":
+        indices_train = np.asarray(data.velocity == "M").nonzero()[0]
+        indices_val = np.asarray(data.velocity == "P").nonzero()[0]
+        indices_test = np.asarray(data.velocity == "F").nonzero()[0]
+        np.random.shuffle(indices_train)
+        np.random.shuffle(indices_val)
+        np.random.shuffle(indices_test)
     elif mode == "mixed":
         # Reproducible random shuffle of indices, using a fixed seed
         indices = np.arange(len(data))
@@ -59,13 +68,13 @@ def generate_split_indices(data, partition_ratios=None, mode="mixed", seed=None)
         indices_train = indices[:split_point_train]
         indices_val = indices[split_point_train:split_point_val]
         indices_test = indices[split_point_val:]
+
     else:
         raise Exception("Mode not recognised")
 
+    # Print training, validation and test set statistics
     indices_train = indices_train.astype(int)
     indices_val = indices_val.astype(int)
-
-    # Compute training, validation and test set statistics
     print(len(indices_train), "training samples")
     print(len(indices_val), "validation samples")
     print(len(indices_test), "test samples")
@@ -87,12 +96,13 @@ def generate_split_indices(data, partition_ratios=None, mode="mixed", seed=None)
         print("Test set contains", np.round(test_class_balance * 100), "% Upright pianos")
         if mode == "segment_instruments":
             print("\t", pd.unique(data.iloc[indices_test].instrument))
+    print("Overall, dataset contains", 100 * data.label.sum(axis=0)/len(data), "% Upright pianos")
     return indices_train, indices_val, indices_test
 
 
 def train_model(train_set, val_set):
     print("\n--------------TRAINING MODEL--------------")
-    model = TimbreCNN().to(device)
+    model = SingleNoteTimbreCNN().to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
 
     with torch.enable_grad():
@@ -165,9 +175,9 @@ def evaluate_CNN(evaluated_model, test_set):
     return evaluate_scores(labels_acc, preds_acc)
 
 
-def cross_validate(total_train_set):
+def cross_validate(total_train_set, partition_mode="segment_instruments"):
     print("\n-----------2-FOLD CROSS-VALIDATION-----------")
-    set_1, set_2, _ = generate_split_indices(total_train_set, partition_ratios=[0.5, 0.5], mode="segment_instruments")
+    set_1, set_2, _ = generate_split_indices(total_train_set, partition_ratios=[0.5, 0.5], mode=partition_mode)
 
     train_cv1 = DataLoader(dataset, batch_size=batch_size, shuffle=False, sampler=sampler.SubsetRandomSampler(set_1))
     val_cv1 = DataLoader(dataset, batch_size=batch_size, shuffle=False, sampler=sampler.SubsetRandomSampler(set_2))
@@ -204,13 +214,16 @@ if __name__ == '__main__':
         print("GPU:", torch.cuda.get_device_name(0))
 
     print("\n----------------LOADING DATA----------------")
-    loader = InstrumentLoader(data_dir, note_range=[48, 72], set_velocity="M")
+    # loader = InstrumentLoader(data_dir, note_range=[48, 72], set_velocity=None, normalise_wavs=True)
+    # data = loader.preprocess(fmin=20, fmax=20000, n_mels=300, normalisation="statistics")
+    loader = MelodyInstrumentLoader(data_dir, note_range=[48, 72], set_velocity=None, normalise_wavs=True)
+    data = loader.preprocess_melodies(midi_dir)
 
-    data = loader.preprocess(fmin=20, fmax=20000, n_mels=300, normalisation="statistics")
+    partition_mode = "segment_velocities"
 
     dataset = TimbreDataset(data)
-    train_indices, val_indices, test_indices = generate_split_indices(data, partition_ratios=[0.8, 0.1],
-                                                                      mode="segment_instruments")
+    train_indices, val_indices, test_indices = generate_split_indices(data, partition_ratios=[0.7, 0.1],
+                                                                      mode=partition_mode)
     loader_train = DataLoader(dataset, batch_size=batch_size, shuffle=False,
                               sampler=sampler.SubsetRandomSampler(train_indices))
     loader_val = DataLoader(dataset, batch_size=batch_size, shuffle=False,
@@ -218,7 +231,7 @@ if __name__ == '__main__':
     loader_test = DataLoader(dataset, batch_size=batch_size, shuffle=False,
                              sampler=sampler.SubsetRandomSampler(test_indices))
 
-    cross_validate(data.iloc[np.union1d(train_indices, val_indices)])
+    cross_validate(data.iloc[np.union1d(train_indices, val_indices)], partition_mode=partition_mode)
 
     if not os.path.isfile(saved_model_path):
         print("\nCreating and training new model")
