@@ -5,7 +5,7 @@ from evaluation import *
 from torch.utils.data import DataLoader, sampler
 from melody_loading import *
 
-saved_model_path = "model_velocityseg.pth"
+model_dir = "models"
 val_interval = 5
 
 # Hyperparameters
@@ -100,9 +100,9 @@ def generate_split_indices(data, partition_ratios=None, mode="mixed", seed=None)
     return indices_train, indices_val, indices_test
 
 
-def train_model(train_set, val_set):
+def train_model(cnn_type, train_set, val_set):
     print("\n--------------TRAINING MODEL--------------")
-    model = SingleNoteTimbreCNN().to(device)
+    model = cnn_type().to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
 
     with torch.enable_grad():
@@ -175,13 +175,13 @@ def evaluate_CNN(evaluated_model, test_set):
     return evaluate_scores(labels_acc, preds_acc)
 
 
-def cross_validate(total_train_set, partition_mode="segment_instruments"):
+def cross_validate(cnn_type, total_train_set, partition_mode="segment_instruments"):
     print("\n-----------2-FOLD CROSS-VALIDATION-----------")
     set_1, set_2, _ = generate_split_indices(total_train_set, partition_ratios=[0.5, 0.5], mode=partition_mode)
 
     train_cv1 = DataLoader(dataset, batch_size=batch_size, shuffle=False, sampler=sampler.SubsetRandomSampler(set_1))
     val_cv1 = DataLoader(dataset, batch_size=batch_size, shuffle=False, sampler=sampler.SubsetRandomSampler(set_2))
-    model_cv1 = train_model(train_set=train_cv1, val_set=val_cv1)
+    model_cv1 = train_model(cnn_type=cnn_type, train_set=train_cv1, val_set=val_cv1)
     scores_cv1 = evaluate_CNN(model_cv1, val_cv1)
     print("Fold 1 validation set scores:")
     print("Confusion matrix:\n", scores_cv1["Confusion"])
@@ -190,7 +190,7 @@ def cross_validate(total_train_set, partition_mode="segment_instruments"):
 
     train_cv2 = DataLoader(dataset, batch_size=batch_size, shuffle=False, sampler=sampler.SubsetRandomSampler(set_2))
     val_cv2 = DataLoader(dataset, batch_size=batch_size, shuffle=False, sampler=sampler.SubsetRandomSampler(set_1))
-    model_cv2 = train_model(train_set=train_cv2, val_set=val_cv2)
+    model_cv2 = train_model(cnn_type=cnn_type, train_set=train_cv2, val_set=val_cv2)
     scores_cv2 = evaluate_CNN(model_cv2, val_cv2)
     print("Fold 2 validation set scores:")
     print("Confusion matrix:\n", scores_cv2["Confusion"])
@@ -214,10 +214,12 @@ if __name__ == '__main__':
         print("GPU:", torch.cuda.get_device_name(0))
 
     print("\n----------------LOADING DATA----------------")
+    # timbre_CNN_type = SingleNoteTimbreCNN
     # loader = InstrumentLoader(data_dir, note_range=[48, 72], set_velocity=None, normalise_wavs=True)
     # data = loader.preprocess(fmin=20, fmax=20000, n_mels=300, normalisation="statistics")
+    timbre_CNN_type = MelodyTimbreCNN
     loader = MelodyInstrumentLoader(data_dir, note_range=[48, 72], set_velocity=None, normalise_wavs=True)
-    data = loader.preprocess_melodies(midi_dir)
+    data = loader.preprocess_melodies(midi_dir, normalisation="statistics")
 
     partition_mode = "segment_velocities"
 
@@ -231,11 +233,14 @@ if __name__ == '__main__':
     loader_test = DataLoader(dataset, batch_size=batch_size, shuffle=False,
                              sampler=sampler.SubsetRandomSampler(test_indices))
 
-    cross_validate(data.iloc[np.union1d(train_indices, val_indices)], partition_mode=partition_mode)
+    cross_validate(cnn_type=timbre_CNN_type,
+                   total_train_set=data.iloc[np.union1d(train_indices, val_indices)],
+                   partition_mode=partition_mode)
 
+    saved_model_path = os.path.join(model_dir, timbre_CNN_type.__name__, "model_melody_velocityseg.pth")
     if not os.path.isfile(saved_model_path):
         print("\nCreating and training new model")
-        model = train_model(train_set=loader_train, val_set=loader_val)
+        model = train_model(cnn_type=timbre_CNN_type, train_set=loader_train, val_set=loader_val)
         # Save model
         torch.save(model, saved_model_path)
         print("Saved trained model to", saved_model_path)

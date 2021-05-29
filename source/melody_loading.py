@@ -7,8 +7,8 @@ from data_loading import *
 import scipy.io.wavfile
 
 Fs = 44100
-midi_dir = "data/midi/sebasgverde_mono-midi-transposition/validation"   # Input midi files directory
-melody_data_dir = "data/melody_dataset_normalisedwavs_20"                  # Output pickle files directory
+midi_dir = "data/midi/sebasgverde_mono-midi-transposition/validation"                   # Input midi files directory
+melody_data_dir = os.path.join(pickled_data_dir, "melody_dataset", "melody_dataset_normalisedwavs_all_20")    # Output pickle files directory
 no_melodies = 20   # Parameter to set how many midi files to use in dataset
 
 
@@ -20,21 +20,24 @@ class SignalWriter:
 
     def add_note(self, start_time, end_time, pitch, debug=False):
         if end_time - start_time < 0.08:
-            # Filter out  short notes which cause glitchy sounds
+            # Filter out short notes which cause glitchy sounds
             return
-        #print("Writing note to waveform from", start_time, "to", end_time, "at pitch", pitch)
+        # print("Writing note to waveform from", start_time, "to", end_time, "at pitch", pitch)
         start_index = int(start_time * self.Fs)
         end_index = int(end_time * self.Fs)
         note_len = end_index-start_index
         sampled_note_row = self.instrument.loc[self.instrument.pitch == pitch]
         if sampled_note_row.empty:
-            print("Pitch", pitch, "doesn't exist in the samples for the current instrument")
-            return
+            raise Exception("Pitch "+str(pitch)+" doesn't exist in the samples for the current instrument")
         elif sampled_note_row.shape[0] > 1:
-            print("Found multiple samples matching pitch", pitch, "for the current instrument")
-        sampled_note = (sampled_note_row.iloc[0].copy()).waveform.copy()
+            # Pick a random sample for the note to increase dataset variety when multiple samples exist
+            rand_index = np.random.randint(sampled_note_row.shape[0])
+            # print("Found multiple samples matching pitch", pitch, "for the current instrument, selecting sample index", rand_index)
+            sampled_note = (sampled_note_row.iloc[rand_index].copy()).waveform.copy()
+        else:
+            sampled_note = (sampled_note_row.iloc[0].copy()).waveform.copy()
         if note_len > len(sampled_note):
-            print("Duration", note_len, "is longer than sample")
+            # print("Duration", note_len, "is longer than sample")
             sampled_note = np.pad(sampled_note, (0, note_len-len(sampled_note)))
         else:
             # Cut sample to note length
@@ -89,7 +92,7 @@ class MelodyInstrumentLoader(InstrumentLoader):
         try:
             length = mid.length
         except Exception as exception:
-            print("Length could not be determined, assuming tempo of 120 BPM, giving:")
+            print("Length could not be determined, assuming tempo of 120 BPM")
             length = mido.tick2second(sum(msg.time for msg in mid.tracks[0]), mid.ticks_per_beat, tempo)
         print("Length:", length)
 
@@ -113,6 +116,9 @@ class MelodyInstrumentLoader(InstrumentLoader):
             if midi_msg.type == "note_on" or midi_msg.type == "note_off":
                 # Compute note timestamp
                 time_delta = mido.tick2second(midi_msg.time, mid.ticks_per_beat, tempo)
+                if time_delta > 4 and current_time != 0:
+                    # Skip melodies with long pauses between notes
+                    raise Exception("Long pause of "+str(time_delta)+" s detected")
                 current_time += time_delta
                 #print("Current time:", current_time)
                 if midi_msg.type == "note_on":
@@ -132,10 +138,10 @@ class MelodyInstrumentLoader(InstrumentLoader):
                     note_active = False
                     end_time = current_time
                     signal.add_note(start_time, end_time, current_note+transposition)
+        # Use trim zeros to remove any silences at the start or end of the melody
+        return np.trim_zeros(signal.waveform)
 
-        return signal.waveform
-
-    def preprocess_melodies(self, midi_dir):
+    def preprocess_melodies(self, midi_dir, normalisation=None):
         out = []
         for instrument_name in pd.unique(self.dataset.instrument):
             instrument_pkl_path = os.path.join(melody_data_dir, instrument_name+".pkl")
@@ -148,14 +154,19 @@ class MelodyInstrumentLoader(InstrumentLoader):
                     total_melodies = 0
                     for melody_midi in os.listdir(midi_dir):
                         melody_mid_path = os.path.join(midi_dir, melody_midi)
-                        print("Applying melody", melody_mid_path, "to instrument", instrument_name, "velocity", velocity)
+                        print("\nApplying melody", melody_midi, "to instrument", instrument_name, "velocity", velocity)
                         try:
                             melody_waveform = self.sequence_melody(melody_mid_path, velocity_samples)
-                            # soundfile.write("data/test_"+melody_midi+"_"+instrument_name+"_"+velocity+".wav",
-                            #                 (melody_waveform.astype(np.float32)/np.max(np.abs(melody_waveform)).astype(np.float32)), Fs)
+                            # soundfile.write("data/test_" + melody_midi + "_" + instrument_name + "_" + velocity + ".wav",
+                            #                 (2147483647*(melody_waveform/np.max(np.abs(melody_waveform)))).astype(np.int32), Fs)
+
                             melody_melspec = self.compute_spectrogram(melody_waveform, Fs)
                             melspec_frames = sample_frames(melody_melspec, frame_len=221)
                             for melspec in melspec_frames:
+                                # Normalise each spectrogram's magnitudes
+                                if normalisation == "statistics":
+                                    melspec = (melspec - np.mean(melspec)) / np.std(melspec)
+
                                 spec_row = pd.DataFrame({"dataset": velocity_samples.iloc[0]["dataset"],
                                                          "instrument": instrument_name,
                                                          "spectrogram": [melspec],
@@ -163,24 +174,24 @@ class MelodyInstrumentLoader(InstrumentLoader):
                                                          "velocity": velocity,
                                                          "label": velocity_samples.iloc[0]["label"]})
                                 instrument_out = instrument_out.append(spec_row)
+                            total_melodies += 1
                         except Exception as e:
-                            print(e)
-                        total_melodies += 1
-                        if total_melodies > no_melodies:
+                            print("Skipping melody", melody_mid_path, "due to sequencing error:")
+                            print("\t", e)
+                        if total_melodies >= no_melodies:
                             break
                 instrument_out.to_pickle(instrument_pkl_path)
             else:
                 print("Loading pickle from", instrument_pkl_path)
                 instrument_out = pd.read_pickle(instrument_pkl_path)
 
-            # TODO: spectrogram post processing (normalisation)
+            # Remove spectrograms of incorrect shape
+            instrument_out = instrument_out[instrument_out["spectrogram"].map(np.shape) == (300, 221)]
 
             # Convert instrument's label to binary, "Grand" = 0, "Upright" = 1
             instrument_out.label = instrument_out.label.replace("Grand", 0)
             instrument_out.label = instrument_out.label.replace("Upright", 1)
 
-            # Remove spectrograms of incorrect shape
-            instrument_out = instrument_out[instrument_out["spectrogram"].map(np.shape) == (300, 221)]
             out.append(instrument_out)
         return pd.concat(out)
 
@@ -201,7 +212,7 @@ def sample_frames(signal, frame_len):
 
 if __name__ == '__main__':
     melody_loader = MelodyInstrumentLoader(data_dir, note_range=[48, 72], set_velocity=None, normalise_wavs=True)
-    melody_melspec_data = melody_loader.preprocess_melodies(midi_dir)
+    melody_melspec_data = melody_loader.preprocess_melodies(midi_dir, normalisation="statistics")
 
     # print("")
 

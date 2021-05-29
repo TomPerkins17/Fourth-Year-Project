@@ -14,18 +14,7 @@ from scipy.io import wavfile
 import soundfile
 
 data_dir = os.path.join("F:", "Data", "Fourth Year Project")
-pickle_dir = "data"
-MAPS_pkl_path = os.path.join(pickle_dir, "MAPS", "MAPS.pkl")
-BiVib_pkl_path = os.path.join(pickle_dir, "BiVib", "BiVib.pkl")
-melspec_pkl_path = os.path.join(pickle_dir, "melspec_preprocessed.pkl")
-
-MAPS_pkl_path_normalisedwavs_M = os.path.join(pickle_dir, "MAPS", "MAPS_normalisedwavs_M.pkl")
-BiVib_pkl_path_normalisedwavs_M = os.path.join(pickle_dir, "BiVib", "BiVib_normalisedwavs_M.pkl")
-melspec_pkl_path_normalisedwavs_M = os.path.join(pickle_dir, "melspec_preprocessed_normalisedwavs_M.pkl")
-
-MAPS_pkl_path_normalisedwavs = os.path.join(pickle_dir, "MAPS", "MAPS_normalisedwavs.pkl")
-BiVib_pkl_path_normalisedwavs = os.path.join(pickle_dir, "BiVib", "BiVib_normalisedwavs.pkl")
-melspec_pkl_path_normalisedwavs = os.path.join(pickle_dir, "melspec_preprocessed_normalisedwavs.pkl")
+pickled_data_dir = "data"
 
 
 class InstrumentLoader:
@@ -39,21 +28,14 @@ class InstrumentLoader:
         self.set_velocity = set_velocity
 
         # Set up pickle filepaths for different versions of the dataset
-        if normalise_wavs:
-            if set_velocity is None:
-                MAPS_pkl = MAPS_pkl_path_normalisedwavs
-                BiVib_pkl = BiVib_pkl_path_normalisedwavs
-                self.melspec_pkl = melspec_pkl_path_normalisedwavs
-            elif set_velocity == "M":
-                MAPS_pkl = MAPS_pkl_path_normalisedwavs_M
-                BiVib_pkl = BiVib_pkl_path_normalisedwavs_M
-                self.melspec_pkl = melspec_pkl_path_normalisedwavs_M
-            else:
-                raise Exception("Paths not configured for set_velocity", set_velocity)
-        else:
-            MAPS_pkl = MAPS_pkl_path
-            BiVib_pkl = BiVib_pkl_path
-            self.melspec_pkl = melspec_pkl_path
+        normalisedwavs_field = "normalisedwavs" if normalise_wavs else "no-norm"
+        velocity_field = "all" if set_velocity is None else set_velocity
+        MAPS_pkl = os.path.join(pickled_data_dir, "MAPS",
+                                "MAPS" + "_" + normalisedwavs_field + "_" + velocity_field + ".pkl")
+        BiVib_pkl = os.path.join(pickled_data_dir, "BiVib",
+                                 "BiVib" + "_" + normalisedwavs_field + "_" + velocity_field + ".pkl")
+        self.melspec_pkl = os.path.join(pickled_data_dir, "single-note_dataset",
+                                        "melspec_preprocessed" + "_" + normalisedwavs_field+"_"+velocity_field + ".pkl")
 
         if not os.path.isfile(MAPS_pkl):
             print(MAPS_pkl, "not found, loading dataset manually")
