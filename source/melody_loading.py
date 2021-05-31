@@ -8,7 +8,7 @@ import scipy.io.wavfile
 
 Fs = 44100
 midi_dir = "data/midi/sebasgverde_mono-midi-transposition/validation"                   # Input midi files directory
-melody_data_dir = os.path.join(pickled_data_dir, "melody_dataset", "melody_dataset_normalisedwavs_all_20")    # Output pickle files directory
+melody_data_dir = os.path.join(pickled_data_dir, "melody_dataset", "melody_dataset_normalisedwavs_all_20_diff-melodies")    # Output pickle files directory
 no_melodies = 20   # Parameter to set how many midi files to use in dataset
 
 
@@ -67,6 +67,10 @@ class SignalWriter:
 
 
 class MelodyInstrumentLoader(InstrumentLoader):
+    def __init__(self, data_dir, note_range=None, set_velocity=None, normalise_wavs=True):
+        super().__init__(data_dir, note_range, set_velocity, normalise_wavs)
+        self.avg_note_lengths = []
+
     def sequence_melody(self, midi_path, sample_instrument):
         mid = MidiFile(midi_path)
 
@@ -102,7 +106,7 @@ class MelodyInstrumentLoader(InstrumentLoader):
         current_note = 0
         current_vel = 0
         note_active = False
-
+        note_counter = 0
         for midi_msg in midi_track:
             #print(midi_msg)
             # Read tempo from header meta messages
@@ -125,6 +129,7 @@ class MelodyInstrumentLoader(InstrumentLoader):
                     if note_active:
                         # Add the current note to the waveform before registering a new note_on
                         signal.add_note(start_time, current_time, current_note+transposition)
+                        note_counter += 1
                     note_active = True
                     current_note = midi_msg.note
                     current_vel = midi_msg.velocity
@@ -138,11 +143,16 @@ class MelodyInstrumentLoader(InstrumentLoader):
                     note_active = False
                     end_time = current_time
                     signal.add_note(start_time, end_time, current_note+transposition)
-        # Use trim zeros to remove any silences at the start or end of the melody
-        return np.trim_zeros(signal.waveform)
+                    note_counter += 1
+
+        # Trim zeros to remove any silences at the start or end of the melody
+        waveform = np.trim_zeros(signal.waveform)
+        self.avg_note_lengths.append((len(waveform)/signal.Fs)/note_counter)
+        return waveform
 
     def preprocess_melodies(self, midi_dir, normalisation=None):
         out = []
+        i = 0
         for instrument_name in pd.unique(self.dataset.instrument):
             instrument_pkl_path = os.path.join(melody_data_dir, instrument_name+".pkl")
             if not os.path.isfile(instrument_pkl_path):
@@ -152,9 +162,14 @@ class MelodyInstrumentLoader(InstrumentLoader):
                 for velocity in pd.unique(instrument_samples.velocity):
                     velocity_samples = instrument_samples.loc[instrument_samples.velocity == velocity]
                     total_melodies = 0
-                    for melody_midi in os.listdir(midi_dir):
+                    while total_melodies < no_melodies:
+                        if i >= len(os.listdir(midi_dir)):
+                            raise Exception("Ran out of midi files to read in directory", midi_dir, "at index", i)
+
+                        melody_midi = os.listdir(midi_dir)[i]
                         melody_mid_path = os.path.join(midi_dir, melody_midi)
                         print("\nApplying melody", melody_midi, "to instrument", instrument_name, "velocity", velocity)
+
                         try:
                             melody_waveform = self.sequence_melody(melody_mid_path, velocity_samples)
                             # soundfile.write("data/test_" + melody_midi + "_" + instrument_name + "_" + velocity + ".wav",
@@ -174,12 +189,21 @@ class MelodyInstrumentLoader(InstrumentLoader):
                                                          "velocity": velocity,
                                                          "label": velocity_samples.iloc[0]["label"]})
                                 instrument_out = instrument_out.append(spec_row)
-                            total_melodies += 1
+                            total_melodies += 1     # Count the number of correctly sequenced and processed melodies
                         except Exception as e:
                             print("Skipping melody", melody_mid_path, "due to sequencing error:")
                             print("\t", e)
-                        if total_melodies >= no_melodies:
-                            break
+                        # Iterate through the files in midi directory so that different melodies are used
+                        # for each velocity layer and each instrument
+                        i += 1
+                    # Print note length statistics once the set number of melodies has been generated
+                    average_note_len = np.mean(self.avg_note_lengths)
+                    max_avg_note_len = np.max(self.avg_note_lengths)
+                    print("\nMelodies contain notes of average length", average_note_len, "s")
+                    print("\t yielding", 2.21/average_note_len, "notes per 2.21 s window")
+                    print("The longest average note length per melody is", max_avg_note_len, "s")
+                    print("\t yielding", 2.21/max_avg_note_len, "notes per 2.21 s window\n")
+                    self.avg_note_lengths = []
                 instrument_out.to_pickle(instrument_pkl_path)
             else:
                 print("Loading pickle from", instrument_pkl_path)
