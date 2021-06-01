@@ -6,7 +6,7 @@ from torch.utils.data import DataLoader, sampler
 from melody_loading import *
 
 model_dir = "models"
-model_name = "diff-melodies"
+model_name = "diff-melodies_test"
 val_interval = 5
 
 # Hyperparameters
@@ -222,7 +222,7 @@ if __name__ == '__main__':
     loader = MelodyInstrumentLoader(data_dir, note_range=[48, 72], set_velocity=None, normalise_wavs=True)
     data = loader.preprocess_melodies(midi_dir, normalisation="statistics")
 
-    partition_mode = "segment_instruments"
+    partition_mode = "segment_velocities"
 
     dataset = TimbreDataset(data)
     train_indices, val_indices, test_indices = generate_split_indices(data, partition_ratios=[0.7, 0.1],

@@ -1,3 +1,6 @@
+import time
+
+import pandas as pd
 from mido import MidiFile
 import mido
 import librosa
@@ -5,11 +8,13 @@ import numpy as np
 import math
 from data_loading import *
 import scipy.io.wavfile
+import sounddevice as sd
 
 Fs = 44100
 midi_dir = "data/midi/sebasgverde_mono-midi-transposition/validation"                   # Input midi files directory
 melody_data_dir = os.path.join(pickled_data_dir, "melody_dataset", "melody_dataset_normalisedwavs_all_20_diff-melodies")    # Output pickle files directory
 no_melodies = 20   # Parameter to set how many midi files to use in dataset
+
 
 
 class SignalWriter:
@@ -234,9 +239,60 @@ def sample_frames(signal, frame_len):
     return frames
 
 
-if __name__ == '__main__':
-    melody_loader = MelodyInstrumentLoader(data_dir, note_range=[48, 72], set_velocity=None, normalise_wavs=True)
-    melody_melspec_data = melody_loader.preprocess_melodies(midi_dir, normalisation="statistics")
+def sample_midi_instrument(instrument_name, instrument_label, note_range=None, plot=False):
+    rec_offset = 1  # integer number of seconds to wait after starting to record before sending MIDI message
+    duration = 2.21 + rec_offset  # recording duration in seconds
+    velocity_range = np.linspace(start=0, stop=127, num=5).astype(int)[1:4] # Creates 3 evenly spaced values around 64
+    # Should detect audio interface midi output named "Focusrite USB MIDI 1"
+    print("Available midi ports:", mido.get_output_names())
+    outport = mido.open_output("Focusrite USB MIDI 1")
 
-    # print("")
+    data = pd.DataFrame()
+    for note_pitch in range(note_range[0], note_range[1]+1):
+        for velocity_midi in velocity_range:
+            # Make sure sound device (audio interface) has sample rate set to Fs = 44100 Hz
+            note_wav = sd.rec(int(duration * Fs), samplerate=Fs, channels=1)
+            time.sleep(rec_offset)  # Ensure release from previous note doesn't bleed into current one + avoid artifacts
+            outport.send(mido.Message("note_on", note=note_pitch, velocity=velocity_midi))
+            sd.wait()
+            outport.send(mido.Message("note_off", note=note_pitch))
+            note_wav = note_wav.flatten()
+            note_wav = note_wav[int(rec_offset * Fs):]      # Compensate for recording offset
+            note_wav = note_wav/np.max(np.abs(note_wav))    # Normalise waveform
+            if plot:
+                plt.plot(note_wav)
+                plt.show()
+
+            # Convert to string velocities
+            if velocity_midi == velocity_range[0]:
+                velocity = "P"
+            if velocity_midi == velocity_range[1]:
+                velocity = "M"
+            if velocity_midi == velocity_range[2]:
+                velocity = "F"
+
+            #soundfile.write("data/Roland_FP80_samples/"+str(note_pitch)+"_"+str(velocity)+".wav", note_wav, Fs)
+
+            sample_row = pd.DataFrame({"dataset": pd.Series(["Unseen"], dtype="category"),
+                                       "instrument": pd.Series([instrument_name], dtype="category"),
+                                       "waveform": [note_wav],
+                                       "Fs": pd.Series([Fs], dtype="category"),
+                                       "pitch": pd.Series([note_pitch], dtype="int8"),
+                                       "velocity": pd.Series([velocity], dtype="category"),
+                                       "sustain": pd.Series([0], dtype=bool),
+                                       "label": pd.Series([instrument_label], dtype="category")})
+            data = data.append(sample_row)
+    pickle_path = os.path.join("data", "single-note_unseen", instrument_name+".pkl")
+    data.to_pickle(pickle_path)
+    print("Pickle saved as", pickle_path)
+    return data
+
+
+if __name__ == '__main__':
+    # melody_loader = MelodyInstrumentLoader(data_dir, note_range=[48, 72], set_velocity=None, normalise_wavs=True)
+    # melody_melspec_data = melody_loader.preprocess_melodies(midi_dir, normalisation="statistics")
+    sample_data = sample_midi_instrument(instrument_name="nord_BabyUpright-Med",
+                                         instrument_label="Upright",
+                                         note_range=[48, 72], plot=False)
+    print("")
 
