@@ -6,7 +6,7 @@ from torch.utils.data import DataLoader, sampler
 from melody_loading import *
 
 model_dir = "models"
-model_name = "diff-melodies_test"
+model_name = "diff-melodies"
 val_interval = 5
 
 # Hyperparameters
@@ -158,6 +158,7 @@ def evaluate_CNN(evaluated_model, test_set):
     print("\n-------------EVALUATING MODEL-------------")
     labels_acc = np.empty(0, dtype=int)
     preds_acc = np.empty(0, dtype=int)
+    instruments_acc = np.empty(0, dtype=str)
     with torch.no_grad():
         # Inference mode
         evaluated_model.train(False)
@@ -169,11 +170,21 @@ def evaluate_CNN(evaluated_model, test_set):
             y = evaluated_model(x)
             print("+Evaluating - Batch loss:", loss_function(y, label).item())
             pred = torch.round(y)
-            # Accumulate per-batch ground truths and outputs
+            # Accumulate per-batch ground truths, outputs and instrument names
             labels_acc = np.append(labels_acc, label.cpu())
             preds_acc = np.append(preds_acc, pred.cpu())
-
-    return evaluate_scores(labels_acc, preds_acc)
+            instruments_acc = np.append(instruments_acc, np.array(batch[2]))
+    for instrument in np.unique(instruments_acc):
+        instrument_mask = np.nonzero(instruments_acc == instrument)
+        print("- Evaluation for instrument", instrument)
+        instrument_scores = evaluate_scores(labels_acc[instrument_mask], preds_acc[instrument_mask])
+        print("\tAccuracy:", np.round(instrument_scores["Accuracy"], 2))
+    print("\n----------Overall Performance----------")
+    overall_scores = evaluate_scores(labels_acc, preds_acc)
+    print("Confusion matrix:\n", overall_scores["Confusion"])
+    print("Accuracy:", np.round(overall_scores["Accuracy"], 2))
+    print("F1 score:", np.round(overall_scores["F1"], 2))
+    return overall_scores
 
 
 def cross_validate(cnn_type, total_train_set, partition_mode="segment_instruments"):
@@ -216,11 +227,15 @@ if __name__ == '__main__':
 
     print("\n----------------LOADING DATA----------------")
     # timbre_CNN_type = SingleNoteTimbreCNN
-    # loader = InstrumentLoader(data_dir, note_range=[48, 72], set_velocity=None, normalise_wavs=True)
-    # data = loader.preprocess(fmin=20, fmax=20000, n_mels=300, normalisation="statistics")
+    # loader = InstrumentLoader(data_dir, note_range=[48, 72], set_velocity=None, normalise_wavs=True, load_unseen=True)
+    # total_data = loader.preprocess(fmin=20, fmax=20000, n_mels=300, normalisation="statistics")
     timbre_CNN_type = MelodyTimbreCNN
-    loader = MelodyInstrumentLoader(data_dir, note_range=[48, 72], set_velocity=None, normalise_wavs=True)
-    data = loader.preprocess_melodies(midi_dir, normalisation="statistics")
+    loader = MelodyInstrumentLoader(data_dir, note_range=[48, 72], set_velocity=None, normalise_wavs=True, load_unseen=True)
+    total_data = loader.preprocess_melodies(midi_dir, normalisation="statistics")
+
+    # Split into seen and unseen subsets
+    data = total_data[total_data.dataset != "Unseen"]
+    data_unseen = total_data[total_data.dataset == "Unseen"]
 
     partition_mode = "segment_velocities"
 
@@ -251,7 +266,15 @@ if __name__ == '__main__':
     print(model)
     model.count_parameters()
 
+    print("\nEvaluation on test set")
     scores = evaluate_CNN(model, loader_test)
     print("Confusion matrix:\n", scores["Confusion"])
     print("Accuracy:", np.round(scores["Accuracy"], 2))
     print("F1 score:", np.round(scores["F1"], 2))
+
+    print("\nEvaluation on unseen set")
+    dataset_unseen = TimbreDataset(data_unseen)
+    loader_unseen = DataLoader(dataset_unseen, batch_size=batch_size, shuffle=False)
+    scores_unseen = evaluate_CNN(model, loader_unseen)
+    print("")
+

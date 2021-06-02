@@ -12,13 +12,16 @@ import matplotlib.pyplot as plt
 from torch.utils.data import Dataset
 from scipy.io import wavfile
 import soundfile
+import sounddevice as sd
+import mido
+import time
 
 data_dir = os.path.join("F:", "Data", "Fourth Year Project")
 pickled_data_dir = "data"
 
 
 class InstrumentLoader:
-    def __init__(self, data_dir, note_range=None, set_velocity=None, normalise_wavs=False):
+    def __init__(self, data_dir, note_range=None, set_velocity=None, normalise_wavs=False, load_unseen=False):
         # midi_range, if specified, restricts the notes used in the dataset
         #   C3 to C5 (2 octaves centred around middle C): MIDI 48-72
         # velocity, if specified, restricts the velocities to medium
@@ -26,16 +29,18 @@ class InstrumentLoader:
         self.dataset = pd.DataFrame()
         self.note_range = note_range
         self.set_velocity = set_velocity
+        self.Fs = 44100
 
         # Set up pickle filepaths for different versions of the dataset
         normalisedwavs_field = "normalisedwavs" if normalise_wavs else "no-norm"
         velocity_field = "all" if set_velocity is None else set_velocity
-        MAPS_pkl = os.path.join(pickled_data_dir, "MAPS",
+        unseen_field = "+unseen" if load_unseen else ""
+        MAPS_pkl = os.path.join(pickled_data_dir, "single-note_dataset", "MAPS",
                                 "MAPS" + "_" + normalisedwavs_field + "_" + velocity_field + ".pkl")
-        BiVib_pkl = os.path.join(pickled_data_dir, "BiVib",
+        BiVib_pkl = os.path.join(pickled_data_dir, "single-note_dataset", "BiVib",
                                  "BiVib" + "_" + normalisedwavs_field + "_" + velocity_field + ".pkl")
-        self.melspec_pkl = os.path.join(pickled_data_dir, "single-note_dataset",
-                                        "melspec_preprocessed" + "_" + normalisedwavs_field+"_"+velocity_field + ".pkl")
+        self.melspec_pkl = os.path.join(pickled_data_dir, "single-note_dataset", "preprocessed",
+                                        "melspec_preprocessed"+"_"+normalisedwavs_field+"_"+velocity_field+unseen_field+".pkl")
 
         if not os.path.isfile(MAPS_pkl):
             print(MAPS_pkl, "not found, loading dataset manually")
@@ -56,6 +61,10 @@ class InstrumentLoader:
             print("Loading pickle from", BiVib_pkl)
             dataset_BiVib = pd.read_pickle(BiVib_pkl)
         self.dataset = self.dataset.append(dataset_BiVib)
+
+        if load_unseen:
+            dataset_unseen = self.load_unseen_dataset(pkl_dir="data/single-note_unseen", note_range=note_range)
+            self.dataset = self.dataset.append(dataset_unseen)
 
     def load_MAPS(self, note_range, set_velocity, normalise):
         # Types of each piano
@@ -105,13 +114,15 @@ class InstrumentLoader:
                                 if velocity != set_velocity:
                                     continue
 
-                            # MAPS has a 44.1kHz sampling rate
-                            Fs = 44100
                             # Read waveform
                             wav_file_read = inst_zip.read(file)
-                            # Load codec wav PCM s16le 44100Hz using int16 datatype
-                            audio_data, Fs = soundfile.read(io.BytesIO(wav_file_read), dtype="int16",
-                                                      start=int(start_time*Fs), stop=int(end_time*Fs))
+                            # Load codec wav PCM s16le 44100Hz using int16 datatype MAPS has a 44.1kHz sampling rate
+                            audio_data, read_Fs = soundfile.read(io.BytesIO(wav_file_read), dtype="int16",
+                                                      start=int(start_time*self.Fs), stop=int(end_time*self.Fs))
+                            if read_Fs != self.Fs:
+                                raise Exception("Mismatch between loader sample rate of " + str(self.Fs) +
+                                                " and file sample rate of " + str(read_Fs))
+
                             # Normalise amplitude to make volume uniform across different notes
                             if normalise:
                                 audio_data = (32767*(audio_data/np.max(np.abs(audio_data)))).astype(np.int16)
@@ -119,7 +130,7 @@ class InstrumentLoader:
                             audio_data = np.sum(audio_data.astype("int32"), axis=1)
 
                             # Append to dataframe
-                            sample_row = pd.DataFrame([["MAPS", inst_name, audio_data, Fs, pitch, velocity, sustain, label]],
+                            sample_row = pd.DataFrame([["MAPS", inst_name, audio_data, self.Fs, pitch, velocity, sustain, label]],
                                                       index=pd.Index([sample_name], name="filename"),
                                                       columns=["dataset", "instrument", "waveform", "Fs", "pitch", "velocity", "sustain", "label"])
                             data = data.append(sample_row)
@@ -237,9 +248,8 @@ class InstrumentLoader:
                     # Convert from stereo to mono by summing channels.
                     #   Division and sum are performed as float64 to prevent overflow and truncation
                     audio_data = np.sum(audio_data/2, axis=1)
-                    # Resample to 44.1kHz. scipy.signal.resample may be faster, uses Fourier domain
-                    Fs = 44100
-                    audio_data = librosa.resample(audio_data.astype(float), orig_Fs, Fs).astype("int32")
+                    # Resample to loader sample rate. scipy.signal.resample may be faster, uses Fourier domain
+                    audio_data = librosa.resample(audio_data.astype(float), orig_Fs, self.Fs).astype("int32")
                     # Crop to 2.1s to match MAPS lengths, since BiVib holds note until it dies out while MAPS releases after about 2.1s
                     if len(audio_data) > 97285:
                         audio_data = audio_data[:97285]
@@ -248,13 +258,82 @@ class InstrumentLoader:
                     sample_row = pd.DataFrame({"dataset": pd.Series(["BiVib"], dtype="category"),
                                                "instrument": pd.Series([str(instrument_type)], dtype="category"),
                                                "waveform": [audio_data],
-                                               "Fs": pd.Series([Fs], dtype="category"),
+                                               "Fs": pd.Series([self.Fs], dtype="category"),
                                                "pitch": pd.Series([pitch], dtype="int8"),
                                                "velocity": pd.Series([velocity], dtype="category"),
                                                "sustain": pd.Series([sustain], dtype=bool),
                                                "label": pd.Series([label], dtype="category")})
                     sample_row.index = pd.Index([sample_name], name="filename")
                     data = data.append(sample_row)
+        return data
+
+    def load_unseen_dataset(self, pkl_dir=None, note_range=None):
+        unseen_dataset = pd.DataFrame()
+        if pkl_dir is not None and os.path.isdir(pkl_dir):
+            for pkl_name in os.listdir(pkl_dir):
+                instrument_pkl_path = os.path.join(pkl_dir, pkl_name)
+                print("Loading pickle from", instrument_pkl_path)
+                instrument_samples = pd.read_pickle(instrument_pkl_path)
+                unseen_dataset = unseen_dataset.append(instrument_samples)
+        else:
+            print("Manually sampling dataset from instruments")
+            continue_sampling = input("Enter \"y\" if you want to, and are ready to, sample an instrument") == "y"
+            while continue_sampling:
+                instrument_name = input("Enter instrument name")
+                instrument_label = input("Enter instrument label")
+                instrument_samples = self.load_midi_instrument(instrument_name, instrument_label, note_range)
+                unseen_dataset = unseen_dataset.append(instrument_samples)
+                continue_sampling = input("Enter \"y\" if you want to, and are ready to, sample an instrument") == "y"
+        return unseen_dataset
+
+    def load_midi_instrument(self, instrument_name=None, instrument_label=None, note_range=None, plot=False):
+        rec_offset = 1  # integer number of seconds to wait after starting to record before sending MIDI message
+        duration = 2.21 + rec_offset  # recording duration in seconds
+        velocity_range = np.linspace(start=0, stop=127, num=5).astype(int)[
+                         1:4]  # Creates 3 evenly spaced values around 64
+        # Should detect audio interface midi output named "Focusrite USB MIDI 1"
+        print("Available midi ports:", mido.get_output_names())
+        outport = mido.open_output("Focusrite USB MIDI 1")
+
+        data = pd.DataFrame()
+        for note_pitch in range(note_range[0], note_range[1] + 1):
+            for velocity_midi in velocity_range:
+                # Make sure sound device (audio interface) has sample rate set to self.Fs = 44100 Hz
+                note_wav = sd.rec(int(duration * self.Fs), samplerate=self.Fs, channels=1)
+                time.sleep(
+                    rec_offset)  # Ensure release from previous note doesn't bleed into current one + avoid artifacts
+                outport.send(mido.Message("note_on", note=note_pitch, velocity=velocity_midi))
+                sd.wait()
+                outport.send(mido.Message("note_off", note=note_pitch))
+                note_wav = note_wav.flatten()
+                note_wav = note_wav[int(rec_offset * self.Fs):]  # Compensate for recording offset
+                note_wav = note_wav / np.max(np.abs(note_wav))  # Normalise waveform
+                if plot:
+                    plt.plot(note_wav)
+                    plt.show()
+
+                # Convert to string velocities
+                if velocity_midi == velocity_range[0]:
+                    velocity = "P"
+                if velocity_midi == velocity_range[1]:
+                    velocity = "M"
+                if velocity_midi == velocity_range[2]:
+                    velocity = "F"
+
+                # soundfile.write("data/Roland_FP80_samples/"+str(note_pitch)+"_"+str(velocity)+".wav", note_wav, self.Fs)
+
+                sample_row = pd.DataFrame({"dataset": pd.Series(["Unseen"], dtype="category"),
+                                           "instrument": pd.Series([instrument_name], dtype="category"),
+                                           "waveform": [note_wav],
+                                           "Fs": pd.Series([self.Fs], dtype="category"),
+                                           "pitch": pd.Series([note_pitch], dtype="int8"),
+                                           "velocity": pd.Series([velocity], dtype="category"),
+                                           "sustain": pd.Series([0], dtype=bool),
+                                           "label": pd.Series([instrument_label], dtype="category")})
+                data = data.append(sample_row)
+        pickle_path = os.path.join("data", "single-note_unseen", instrument_name + ".pkl")
+        data.to_pickle(pickle_path)
+        print("Pickle saved as", pickle_path)
         return data
 
     def stack_velocities(self, data):
@@ -283,7 +362,7 @@ class InstrumentLoader:
                                            "label": label}, index=[0]))
         return out
 
-    def preprocess(self,                # STFT and mel-spectrogram parameters assuming Fs=44100:
+    def preprocess(self,                # STFT and mel-spectrogram parameters assuming self.Fs=44100:
                    n_fft=2048,              # 46 ms STFT frame length
                    win_length=0.025,        # 25 ms spectrogram frame length, 0-padded to apply STFT over 46 ms
                    window_spacing=0.010,    # 10 ms hop size between windows
@@ -297,8 +376,7 @@ class InstrumentLoader:
             print(self.melspec_pkl, "not found, pre-processing dataset manually")
 
             max_len = len(max(self.dataset["waveform"], key=len))
-            spec_params = {"Fs": 44100, # NOTE: this is the waveform's sample rate, not the spectrogram framerate.
-                                        # We assume this is always 44100Hz for the purposes of plotting
+            spec_params = {"Fs": self.Fs,   # NOTE: this is the waveform's sample rate, not the spectrogram framerate.
                            "framerate": 1 / window_spacing,
                            "fmin": fmin,
                            "fmax": fmax,
@@ -310,11 +388,11 @@ class InstrumentLoader:
             out = pd.DataFrame()
             for i, sample in self.dataset.iterrows():
                 waveform = sample["waveform"]
-                Fs = sample["Fs"]
+                sample_Fs = sample["Fs"]
 
                 if fmax is None:
                     # Use Nyquist frequency if no max frequency is specified
-                    fmax = Fs/2
+                    fmax = sample_Fs/2
 
                 if pad:
                     # 0-pad waveforms to the maximum waveform length in the dataset
@@ -327,7 +405,7 @@ class InstrumentLoader:
                     label = 1
 
                 # Compute the log-mel spectrogram
-                melspec = self.compute_spectrogram(waveform, Fs, n_fft, win_length, window_spacing, window, n_mels, fmin, fmax, plot)
+                melspec = self.compute_spectrogram(waveform, sample_Fs, n_fft, win_length, window_spacing, window, n_mels, fmin, fmax, plot)
 
                 # Normalise the spectrogram's magnitudes
                 if normalisation == "statistics":
@@ -365,7 +443,7 @@ class InstrumentLoader:
 
         return out
 
-    def compute_spectrogram(self, waveform, Fs,
+    def compute_spectrogram(self, waveform, waveform_Fs,
                             n_fft=2048,              # 46 ms STFT frame length
                             win_length=0.025,        # 25 ms spectrogram frame length, 0-padded to apply STFT over 46 ms
                             window_spacing=0.010,    # 10 ms hop size between windows
@@ -377,10 +455,10 @@ class InstrumentLoader:
         if waveform.dtype == "int32":
             waveform = np.array([np.float32((s >> 1) / (32768.0)) for s in waveform])
 
-        melspec = librosa.feature.melspectrogram(waveform, Fs,
+        melspec = librosa.feature.melspectrogram(waveform, waveform_Fs,
                                                  n_fft=n_fft,  # Samples per STFT frame
-                                                 win_length=int(win_length * Fs),  # Samples per 0-padded spec window
-                                                 hop_length=int(window_spacing * Fs),  # No. of samples between windows
+                                                 win_length=int(win_length * waveform_Fs),  # Samples per 0-padded spec window
+                                                 hop_length=int(window_spacing * waveform_Fs),  # No. of samples between windows
                                                  window=window,  # Window type
                                                  n_mels=n_mels,  # No. of mel freq bins
                                                  fmin=fmin, fmax=fmax)
@@ -388,7 +466,7 @@ class InstrumentLoader:
         melspec = librosa.power_to_db(melspec, ref=np.max)
 
         if plot:
-            plot_spectrogram(melspec, {"Fs": Fs, "framerate": 1/window_spacing, "fmin": fmin, "fmax": fmax})
+            plot_spectrogram(melspec, {"Fs": waveform_Fs, "framerate": 1/window_spacing, "fmin": fmin, "fmax": fmax})
 
         return melspec
 
@@ -455,11 +533,11 @@ class TimbreDataset(Dataset):
 
     def __getitem__(self, index):
         row = self.dataframe.iloc[index]
-        return row.spectrogram, row.label
+        return row.spectrogram, row.label, row.instrument
 
 
 if __name__ == '__main__':
-    loader = InstrumentLoader(data_dir, note_range=[48, 72], set_velocity="M")
+    loader = InstrumentLoader(data_dir, note_range=[48, 72], set_velocity=None, normalise_wavs=True, load_unseen=True)
 
     upright_count = len(loader.dataset.loc[loader.dataset['label'] == "Upright"])
     grand_count = len(loader.dataset.loc[loader.dataset['label'] == "Grand"])
