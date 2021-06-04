@@ -6,7 +6,6 @@ import tarfile
 import py7zr
 import librosa
 import pickle
-import gc, joblib, feather
 import librosa.display
 import matplotlib.pyplot as plt
 from torch.utils.data import Dataset
@@ -18,10 +17,11 @@ import time
 
 data_dir = os.path.join("F:", "Data", "Fourth Year Project")
 pickled_data_dir = "data"
+sample_new_midi_inst = False
 
 
 class InstrumentLoader:
-    def __init__(self, data_dir, note_range=None, set_velocity=None, normalise_wavs=False, load_unseen=False):
+    def __init__(self, data_dir, note_range=None, set_velocity=None, normalise_wavs=True, load_MIDIsampled=True):
         # midi_range, if specified, restricts the notes used in the dataset
         #   C3 to C5 (2 octaves centred around middle C): MIDI 48-72
         # velocity, if specified, restricts the velocities to medium
@@ -34,13 +34,13 @@ class InstrumentLoader:
         # Set up pickle filepaths for different versions of the dataset
         normalisedwavs_field = "normalisedwavs" if normalise_wavs else "no-norm"
         velocity_field = "all" if set_velocity is None else set_velocity
-        unseen_field = "+unseen" if load_unseen else ""
+        MIDIsampled_field = "+MIDIsampled" if load_MIDIsampled else ""
         MAPS_pkl = os.path.join(pickled_data_dir, "single-note_dataset", "MAPS",
                                 "MAPS" + "_" + normalisedwavs_field + "_" + velocity_field + ".pkl")
         BiVib_pkl = os.path.join(pickled_data_dir, "single-note_dataset", "BiVib",
                                  "BiVib" + "_" + normalisedwavs_field + "_" + velocity_field + ".pkl")
         self.melspec_pkl = os.path.join(pickled_data_dir, "single-note_dataset", "preprocessed",
-                                        "melspec_preprocessed"+"_"+normalisedwavs_field+"_"+velocity_field+unseen_field+".pkl")
+                                        "melspec_preprocessed"+"_"+normalisedwavs_field+"_"+velocity_field+MIDIsampled_field+".pkl")
 
         if not os.path.isfile(MAPS_pkl):
             print(MAPS_pkl, "not found, loading dataset manually")
@@ -62,9 +62,9 @@ class InstrumentLoader:
             dataset_BiVib = pd.read_pickle(BiVib_pkl)
         self.dataset = self.dataset.append(dataset_BiVib)
 
-        if load_unseen:
-            dataset_unseen = self.load_unseen_dataset(pkl_dir="data/single-note_unseen", note_range=note_range)
-            self.dataset = self.dataset.append(dataset_unseen)
+        if load_MIDIsampled:
+            dataset_MIDIsampled = self.load_MIDIsampled_dataset(pkl_dir="data/single-note_dataset/MIDIsampled", note_range=note_range, sample_new=sample_new_midi_inst)
+            self.dataset = self.dataset.append(dataset_MIDIsampled)
 
     def load_MAPS(self, note_range, set_velocity, normalise):
         # Types of each piano
@@ -122,12 +122,15 @@ class InstrumentLoader:
                             if read_Fs != self.Fs:
                                 raise Exception("Mismatch between loader sample rate of " + str(self.Fs) +
                                                 " and file sample rate of " + str(read_Fs))
+                            # Retain only the L channel to get mono wav information
+                            audio_data = audio_data[:, 0].astype(np.int32)
+                            # Sum to mono without dividing amplitude using 32 bits to prevent 16 bit overflow - Not used due to phase cancellation
+                            # audio_data = np.sum(audio_data.astype("int32"), axis=1)
 
                             # Normalise amplitude to make volume uniform across different notes
                             if normalise:
-                                audio_data = (32767*(audio_data/np.max(np.abs(audio_data)))).astype(np.int16)
-                            # Sum to mono without dividing amplitude using 32 bits to prevent 16 bit overflow
-                            audio_data = np.sum(audio_data.astype("int32"), axis=1)
+                                audio_data = audio_data - np.mean(audio_data).astype(np.int32)   # Remove DC offset
+                                audio_data = (2147483647*(audio_data/np.max(np.abs(audio_data)))).astype(np.int32)
 
                             # Append to dataframe
                             sample_row = pd.DataFrame([["MAPS", inst_name, audio_data, self.Fs, pitch, velocity, sustain, label]],
@@ -241,15 +244,20 @@ class InstrumentLoader:
                             continue
 
                     # BiVib wavs are 96kHz 24 bit int, we want to convert to CD quality 44100 Hz int16
-                    audio_data, orig_Fs = soundfile.read(file_path, dtype="int16")
-                    # Normalise amplitude to make volume uniform across different notes
-                    if normalise:
-                        audio_data = (32767 * (audio_data / np.max(np.abs(audio_data)))).astype(np.int16)
-                    # Convert from stereo to mono by summing channels.
-                    #   Division and sum are performed as float64 to prevent overflow and truncation
-                    audio_data = np.sum(audio_data/2, axis=1)
+                    audio_data, orig_Fs = soundfile.read(file_path, dtype="int32")
+                    # Retain only the L channel to get mono wav information
+                    audio_data = audio_data[:, 0]
+
+                    # Convert from stereo to mono by summing channels - Not optimal due to phase cancellation
+                    #audio_data = np.sum(audio_data/2, axis=1) # Division and sum are performed as float64 to prevent overflow and truncation
                     # Resample to loader sample rate. scipy.signal.resample may be faster, uses Fourier domain
                     audio_data = librosa.resample(audio_data.astype(float), orig_Fs, self.Fs).astype("int32")
+
+                    # Normalise amplitude to make volume uniform across different notes
+                    if normalise:
+                        audio_data = audio_data - np.mean(audio_data)  # Remove DC offset
+                        audio_data = (2147483647 * (audio_data / np.max(np.abs(audio_data)))).astype(np.int32)
+
                     # Crop to 2.1s to match MAPS lengths, since BiVib holds note until it dies out while MAPS releases after about 2.1s
                     if len(audio_data) > 97285:
                         audio_data = audio_data[:97285]
@@ -267,26 +275,26 @@ class InstrumentLoader:
                     data = data.append(sample_row)
         return data
 
-    def load_unseen_dataset(self, pkl_dir=None, note_range=None):
-        unseen_dataset = pd.DataFrame()
-        if pkl_dir is not None and os.path.isdir(pkl_dir):
+    def load_MIDIsampled_dataset(self, pkl_dir, note_range=None, sample_new=False):
+        data = pd.DataFrame()
+        if not sample_new:
             for pkl_name in os.listdir(pkl_dir):
                 instrument_pkl_path = os.path.join(pkl_dir, pkl_name)
                 print("Loading pickle from", instrument_pkl_path)
                 instrument_samples = pd.read_pickle(instrument_pkl_path)
-                unseen_dataset = unseen_dataset.append(instrument_samples)
+                data = data.append(instrument_samples)
         else:
             print("Manually sampling dataset from instruments")
             continue_sampling = input("Enter \"y\" if you want to, and are ready to, sample an instrument") == "y"
             while continue_sampling:
                 instrument_name = input("Enter instrument name")
                 instrument_label = input("Enter instrument label")
-                instrument_samples = self.load_midi_instrument(instrument_name, instrument_label, note_range)
-                unseen_dataset = unseen_dataset.append(instrument_samples)
+                instrument_samples = self.load_midi_instrument(instrument_name, instrument_label, note_range, pkl_dir, plot=False)
+                data = data.append(instrument_samples)
                 continue_sampling = input("Enter \"y\" if you want to, and are ready to, sample an instrument") == "y"
-        return unseen_dataset
+        return data
 
-    def load_midi_instrument(self, instrument_name=None, instrument_label=None, note_range=None, plot=False):
+    def load_midi_instrument(self, instrument_name=None, instrument_label=None, note_range=None, pkl_dir="data/single-note_dataset/MIDIsampled", plot=False):
         rec_offset = 1  # integer number of seconds to wait after starting to record before sending MIDI message
         duration = 2.21 + rec_offset  # recording duration in seconds
         velocity_range = np.linspace(start=0, stop=127, num=5).astype(int)[
@@ -306,8 +314,9 @@ class InstrumentLoader:
                 sd.wait()
                 outport.send(mido.Message("note_off", note=note_pitch))
                 note_wav = note_wav.flatten()
-                note_wav = note_wav[int(rec_offset * self.Fs):]  # Compensate for recording offset
-                note_wav = note_wav / np.max(np.abs(note_wav))  # Normalise waveform
+                note_wav = note_wav[int(rec_offset * self.Fs):]     # Compensate for recording offset
+                note_wav = note_wav - np.mean(note_wav)             # Remove waveform DC offset
+                note_wav = note_wav / np.max(np.abs(note_wav))      # Normalise waveform
                 if plot:
                     plt.plot(note_wav)
                     plt.show()
@@ -322,7 +331,7 @@ class InstrumentLoader:
 
                 # soundfile.write("data/Roland_FP80_samples/"+str(note_pitch)+"_"+str(velocity)+".wav", note_wav, self.Fs)
 
-                sample_row = pd.DataFrame({"dataset": pd.Series(["Unseen"], dtype="category"),
+                sample_row = pd.DataFrame({"dataset": pd.Series(["MIDIsampled"], dtype="category"),
                                            "instrument": pd.Series([instrument_name], dtype="category"),
                                            "waveform": [note_wav],
                                            "Fs": pd.Series([self.Fs], dtype="category"),
@@ -331,7 +340,7 @@ class InstrumentLoader:
                                            "sustain": pd.Series([0], dtype=bool),
                                            "label": pd.Series([instrument_label], dtype="category")})
                 data = data.append(sample_row)
-        pickle_path = os.path.join("data", "single-note_unseen", instrument_name + ".pkl")
+        pickle_path = os.path.join(pkl_dir, instrument_name + ".pkl")
         data.to_pickle(pickle_path)
         print("Pickle saved as", pickle_path)
         return data
@@ -537,10 +546,7 @@ class TimbreDataset(Dataset):
 
 
 if __name__ == '__main__':
-    loader = InstrumentLoader(data_dir, note_range=[48, 72], set_velocity=None, normalise_wavs=True, load_unseen=True)
-
-    upright_count = len(loader.dataset.loc[loader.dataset['label'] == "Upright"])
-    grand_count = len(loader.dataset.loc[loader.dataset['label'] == "Grand"])
+    loader = InstrumentLoader(data_dir, note_range=[48, 72], set_velocity=None, normalise_wavs=True, load_MIDIsampled=True)
 
     # Shape: (1, 300, 221)
     melspec_data = loader.preprocess(fmin=20, fmax=20000, n_mels=300, normalisation="statistics", plot=False)

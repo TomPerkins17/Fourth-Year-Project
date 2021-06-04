@@ -1,4 +1,8 @@
 # %%
+import warnings
+import sklearn
+import pandas as pd
+
 from data_loading import *
 from timbre_CNN import *
 from evaluation import *
@@ -6,7 +10,7 @@ from torch.utils.data import DataLoader, sampler
 from melody_loading import *
 
 model_dir = "models"
-model_name = "diff-melodies"
+model_name = "diff-melodies_MIDIsampledseen"
 val_interval = 5
 
 # Hyperparameters
@@ -21,7 +25,7 @@ def generate_split_indices(data, partition_ratios=None, mode="mixed", seed=None)
     if partition_ratios is None:
         partition_ratios = [0.8, 0.1]
     rng = np.random.default_rng(seed=seed)
-    if mode == "segment_instruments":
+    if mode == "segment-instruments-random":
         instruments = data.instrument.unique()
         rng.shuffle(instruments)
 
@@ -52,7 +56,21 @@ def generate_split_indices(data, partition_ratios=None, mode="mixed", seed=None)
         np.random.shuffle(indices_train)
         np.random.shuffle(indices_val)
         np.random.shuffle(indices_test)
-    elif mode == "segment_velocities":
+
+    elif mode == "segment-instruments-manual":
+        train_instruments = ["AkPnBcht", "AkPnBsdf", "grand-closed", "grand-removed", "grand-open",
+                             "upright-open", "upright-semiopen", "upright-closed"]
+        val_instruments = ["StbgTGd2", "AkPnCGdD", "ENSTDkCl"]
+        test_instruments = ["AkPnStgb", "SptkBGAm", "ENSTDkAm"]
+
+        indices_train = np.asarray(data.instrument.isin(train_instruments)).nonzero()[0]
+        indices_val = np.asarray(data.instrument.isin(val_instruments)).nonzero()[0]
+        indices_test = np.asarray(data.instrument.isin(test_instruments)).nonzero()[0]
+        np.random.shuffle(indices_train)
+        np.random.shuffle(indices_val)
+        np.random.shuffle(indices_test)
+
+    elif mode == "segment-velocities":
         indices_train = np.asarray(data.velocity == "M").nonzero()[0]
         indices_val = np.asarray(data.velocity == "P").nonzero()[0]
         indices_test = np.asarray(data.velocity == "F").nonzero()[0]
@@ -97,11 +115,11 @@ def generate_split_indices(data, partition_ratios=None, mode="mixed", seed=None)
         print("Test set contains", np.round(test_class_balance * 100), "% Upright pianos")
         if mode == "segment_instruments":
             print("\t", pd.unique(data.iloc[indices_test].instrument))
-    print("Overall, dataset contains", 100 * data.label.sum(axis=0)/len(data), "% Upright pianos")
+    print("Overall, dataset contains", np.round(100 * data.label.sum(axis=0)/len(data)), "% Upright pianos")
     return indices_train, indices_val, indices_test
 
 
-def train_model(cnn_type, train_set, val_set):
+def train_model(cnn_type, train_set, val_set, plot_title=""):
     print("\n--------------TRAINING MODEL--------------")
     model = cnn_type().to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
@@ -148,16 +166,15 @@ def train_model(cnn_type, train_set, val_set):
     plt.xlabel('epoch')
     plt.ylabel('loss')
     plt.grid()
-    plt.title("Loss curves over "+str(epochs)+" epochs of training")
+    plt.title("Loss curves over "+str(epochs)+" epochs of training - "+plot_title)
     plt.show()
 
     return model
 
 
 def evaluate_CNN(evaluated_model, test_set):
-    print("\n-------------EVALUATING MODEL-------------")
-    labels_acc = np.empty(0, dtype=int)
-    preds_acc = np.empty(0, dtype=int)
+    labels_total = np.empty(0, dtype=int)
+    preds_total = np.empty(0, dtype=int)
     instruments_acc = np.empty(0, dtype=str)
     with torch.no_grad():
         # Inference mode
@@ -171,40 +188,45 @@ def evaluate_CNN(evaluated_model, test_set):
             print("+Evaluating - Batch loss:", loss_function(y, label).item())
             pred = torch.round(y)
             # Accumulate per-batch ground truths, outputs and instrument names
-            labels_acc = np.append(labels_acc, label.cpu())
-            preds_acc = np.append(preds_acc, pred.cpu())
+            labels_total = np.append(labels_total, label.cpu())
+            preds_total = np.append(preds_total, pred.cpu())
             instruments_acc = np.append(instruments_acc, np.array(batch[2]))
+    # Calculate scores per instrument
+    per_inst_scores = pd.DataFrame()
     for instrument in np.unique(instruments_acc):
         instrument_mask = np.nonzero(instruments_acc == instrument)
-        print("- Evaluation for instrument", instrument)
-        instrument_scores = evaluate_scores(labels_acc[instrument_mask], preds_acc[instrument_mask])
-        print("\tAccuracy:", np.round(instrument_scores["Accuracy"], 2))
-    print("\n----------Overall Performance----------")
-    overall_scores = evaluate_scores(labels_acc, preds_acc)
-    print("Confusion matrix:\n", overall_scores["Confusion"])
-    print("Accuracy:", np.round(overall_scores["Accuracy"], 2))
-    print("F1 score:", np.round(overall_scores["F1"], 2))
+        # Ignore Confusion matrix and F1 score which are irrelevant here
+        instrument_scores = evaluate_scores(labels_total[instrument_mask], preds_total[instrument_mask])
+        piano_class = "Upright" if labels_total[instrument_mask][0] else "Grand"
+        per_inst_scores = per_inst_scores.append(pd.DataFrame([[np.round(instrument_scores["Accuracy"],2),piano_class]],
+                                                              index=pd.Index([instrument], name="Instrument"),
+                                                              columns=["Accuracy", "Class"]))
+    print("---------Per-instrument scores---------")
+    print(per_inst_scores)
+    # Calculate overall scores
+    overall_scores = evaluate_scores(labels_total, preds_total)
     return overall_scores
 
 
 def cross_validate(cnn_type, total_train_set, partition_mode="segment_instruments"):
-    print("\n-----------2-FOLD CROSS-VALIDATION-----------")
     set_1, set_2, _ = generate_split_indices(total_train_set, partition_ratios=[0.5, 0.5], mode=partition_mode)
 
-    train_cv1 = DataLoader(dataset, batch_size=batch_size, shuffle=False, sampler=sampler.SubsetRandomSampler(set_1))
-    val_cv1 = DataLoader(dataset, batch_size=batch_size, shuffle=False, sampler=sampler.SubsetRandomSampler(set_2))
-    model_cv1 = train_model(cnn_type=cnn_type, train_set=train_cv1, val_set=val_cv1)
+    # Perform fold 1 training and evaluation
+    train_cv1 = DataLoader(dataset_seen, batch_size=batch_size, shuffle=False, sampler=sampler.SubsetRandomSampler(set_1))
+    val_cv1 = DataLoader(dataset_seen, batch_size=batch_size, shuffle=False, sampler=sampler.SubsetRandomSampler(set_2))
+    model_cv1 = train_model(cnn_type=cnn_type, train_set=train_cv1, val_set=val_cv1, plot_title="CV Fold 1")
     scores_cv1 = evaluate_CNN(model_cv1, val_cv1)
-    print("Fold 1 validation set scores:")
+    print("\n------Fold 1 validation set scores--------")
     print("Confusion matrix:\n", scores_cv1["Confusion"])
     print("Accuracy:", np.round(scores_cv1["Accuracy"], 2))
     print("F1 score:", np.round(scores_cv1["F1"], 2))
 
-    train_cv2 = DataLoader(dataset, batch_size=batch_size, shuffle=False, sampler=sampler.SubsetRandomSampler(set_2))
-    val_cv2 = DataLoader(dataset, batch_size=batch_size, shuffle=False, sampler=sampler.SubsetRandomSampler(set_1))
-    model_cv2 = train_model(cnn_type=cnn_type, train_set=train_cv2, val_set=val_cv2)
+    # Perform fold 2 training and evaluation
+    train_cv2 = DataLoader(dataset_seen, batch_size=batch_size, shuffle=False, sampler=sampler.SubsetRandomSampler(set_2))
+    val_cv2 = DataLoader(dataset_seen, batch_size=batch_size, shuffle=False, sampler=sampler.SubsetRandomSampler(set_1))
+    model_cv2 = train_model(cnn_type=cnn_type, train_set=train_cv2, val_set=val_cv2, plot_title="CV Fold 2")
     scores_cv2 = evaluate_CNN(model_cv2, val_cv2)
-    print("Fold 2 validation set scores:")
+    print("\n------Fold 2 validation set scores--------")
     print("Confusion matrix:\n", scores_cv2["Confusion"])
     print("Accuracy:", np.round(scores_cv2["Accuracy"], 2))
     print("F1 score:", np.round(scores_cv2["F1"], 2))
@@ -225,38 +247,39 @@ if __name__ == '__main__':
     if torch.cuda.is_available():
         print("GPU:", torch.cuda.get_device_name(0))
 
-    print("\n----------------LOADING DATA----------------")
+    print("\n\n----------------------LOADING DATA-----------------------")
     # timbre_CNN_type = SingleNoteTimbreCNN
-    # loader = InstrumentLoader(data_dir, note_range=[48, 72], set_velocity=None, normalise_wavs=True, load_unseen=True)
+    # loader = InstrumentLoader(data_dir, note_range=[48, 72], set_velocity=None, normalise_wavs=True, load_MIDIsampled=True)
     # total_data = loader.preprocess(fmin=20, fmax=20000, n_mels=300, normalisation="statistics")
     timbre_CNN_type = MelodyTimbreCNN
-    loader = MelodyInstrumentLoader(data_dir, note_range=[48, 72], set_velocity=None, normalise_wavs=True, load_unseen=True)
+    loader = MelodyInstrumentLoader(data_dir, note_range=[48, 72], set_velocity=None, normalise_wavs=True, load_MIDIsampled=True)
     total_data = loader.preprocess_melodies(midi_dir, normalisation="statistics")
 
     # Split into seen and unseen subsets
-    data = total_data[total_data.dataset != "Unseen"]
-    data_unseen = total_data[total_data.dataset == "Unseen"]
+    data_seen = total_data[total_data.dataset == "MIDIsampled"]
+    data_unseen = total_data[total_data.dataset != "MIDIsampled"]
 
-    partition_mode = "segment_velocities"
+    partition_mode = "segment-velocities"
 
-    dataset = TimbreDataset(data)
-    train_indices, val_indices, test_indices = generate_split_indices(data, partition_ratios=[0.7, 0.1],
+    dataset_seen = TimbreDataset(data_seen)
+    train_indices, val_indices, test_indices = generate_split_indices(data_seen, partition_ratios=[0.7, 0.1],
                                                                       mode=partition_mode)
-    loader_train = DataLoader(dataset, batch_size=batch_size, shuffle=False,
+    loader_train = DataLoader(dataset_seen, batch_size=batch_size, shuffle=False,
                               sampler=sampler.SubsetRandomSampler(train_indices))
-    loader_val = DataLoader(dataset, batch_size=batch_size, shuffle=False,
+    loader_val = DataLoader(dataset_seen, batch_size=batch_size, shuffle=False,
                             sampler=sampler.SubsetRandomSampler(val_indices))
-    loader_test = DataLoader(dataset, batch_size=batch_size, shuffle=False,
+    loader_test = DataLoader(dataset_seen, batch_size=batch_size, shuffle=False,
                              sampler=sampler.SubsetRandomSampler(test_indices))
 
-    cross_validate(cnn_type=timbre_CNN_type,
-                   total_train_set=data.iloc[np.union1d(train_indices, val_indices)],
-                   partition_mode=partition_mode)
+    # print("\n\n-----------------2-FOLD CROSS-VALIDATION-----------------")
+    # cross_validate(cnn_type=timbre_CNN_type,
+    #                total_train_set=data_seen.iloc[np.union1d(train_indices, val_indices)],
+    #                partition_mode=partition_mode)
 
     saved_model_path = os.path.join(model_dir, timbre_CNN_type.__name__, "model_"+partition_mode+"_"+model_name+".pth")
     if not os.path.isfile(saved_model_path):
         print("\nCreating and training new model")
-        model = train_model(cnn_type=timbre_CNN_type, train_set=loader_train, val_set=loader_val)
+        model = train_model(cnn_type=timbre_CNN_type, train_set=loader_train, val_set=loader_val, plot_title="Re-trained model")
         # Save model
         torch.save(model, saved_model_path)
         print("Saved trained model to", saved_model_path)
@@ -266,15 +289,26 @@ if __name__ == '__main__':
     print(model)
     model.count_parameters()
 
-    print("\nEvaluation on test set")
+    print("\n\n-------------Evaluation on the seen test set-------------")
     scores = evaluate_CNN(model, loader_test)
+    print("---Overall seen test set performance---")
     print("Confusion matrix:\n", scores["Confusion"])
     print("Accuracy:", np.round(scores["Accuracy"], 2))
     print("F1 score:", np.round(scores["F1"], 2))
+    conf_plot = scores["Confusion_plot"].plot(cmap=plt.cm.Blues, colorbar=False)
+    conf_plot.ax_.set_title("Test set results: Confusion matrix")
+    plt.show()
 
-    print("\nEvaluation on unseen set")
+    print("\n\n--------------Evaluation on the unseen set---------------")
     dataset_unseen = TimbreDataset(data_unseen)
     loader_unseen = DataLoader(dataset_unseen, batch_size=batch_size, shuffle=False)
     scores_unseen = evaluate_CNN(model, loader_unseen)
+    print("--------Overall unseen set performance--------")
+    print("Confusion matrix:\n", scores_unseen["Confusion"])
+    print("Accuracy:", np.round(scores_unseen["Accuracy"], 2))
+    print("F1 score:", np.round(scores_unseen["F1"], 2))
+    conf_plot = scores_unseen["Confusion_plot"].plot(cmap=plt.cm.Blues, colorbar=False)
+    conf_plot.ax_.set_title("Unseen set results: Confusion matrix")
+    plt.show()
     print("")
 

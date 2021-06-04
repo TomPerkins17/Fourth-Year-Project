@@ -10,7 +10,7 @@ import scipy.io.wavfile
 
 signal_Fs = 44100
 midi_dir = "data/midi/sebasgverde_mono-midi-transposition/validation"                   # Input midi files directory
-melody_data_dir = os.path.join(pickled_data_dir, "melody_dataset", "melody_dataset_normalisedwavs_all_20_diff-melodies+unseen")    # Output pickle files directory
+melody_data_dir = os.path.join(pickled_data_dir, "melody_dataset", "melody_dataset_all_20_diff-melodies+MIDIsampled")    # Output pickle files directory
 no_melodies = 20   # Parameter to set how many midi files to use in dataset
 
 
@@ -74,8 +74,8 @@ class SignalWriter:
 
 
 class MelodyInstrumentLoader(InstrumentLoader):
-    def __init__(self, data_dir, note_range=None, set_velocity=None, normalise_wavs=True, load_unseen=False):
-        super().__init__(data_dir, note_range, set_velocity, normalise_wavs, load_unseen)
+    def __init__(self, data_dir, note_range=None, set_velocity=None, normalise_wavs=True, load_MIDIsampled=True):
+        super().__init__(data_dir, note_range, set_velocity, normalise_wavs, load_MIDIsampled)
         self.avg_note_lengths = []
 
     def sequence_melody(self, midi_path, sample_instrument):
