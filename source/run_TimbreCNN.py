@@ -12,6 +12,7 @@ from melody_loading import *
 model_dir = "models"
 model_name = "diff-melodies_MIDIsampledseen"
 val_interval = 5
+perform_cross_val = False
 
 # Hyperparameters
 batch_size = 128
@@ -57,11 +58,56 @@ def generate_split_indices(data, partition_ratios=None, mode="mixed", seed=None)
         np.random.shuffle(indices_val)
         np.random.shuffle(indices_test)
 
+    elif mode == "segment-instruments-random-balanced":
+        instruments_grand = data[data.label == 0].instrument.unique()
+        instruments_upright = data[data.label == 1].instrument.unique()
+        rng.shuffle(instruments_grand)
+        rng.shuffle(instruments_upright)
+        num_train_instruments = np.round(partition_ratios[0] * len(data.instrument.unique()))
+        num_val_instruments = np.round(partition_ratios[1] * len(data.instrument.unique()))
+        indices_train = []
+        indices_val = []
+        indices_test = []
+        i_grand = 0
+        i_upright = 0
+
+        for i in range(0, len(data.instrument.unique())):
+            if i % 2 and i_upright < len(instruments_upright):
+                next_instrument_indices = np.asarray(data.instrument == instruments_upright[i_upright]).nonzero()[0]
+                i_upright += 1
+            elif i_grand < len(instruments_grand):
+                next_instrument_indices = np.asarray(data.instrument == instruments_grand[i_grand]).nonzero()[0]
+                i_grand += 1
+            else:
+                break
+            if i < num_train_instruments:
+                indices_train = np.append(indices_train, next_instrument_indices)
+            elif i < num_train_instruments+num_val_instruments:
+                indices_val = np.append(indices_val, next_instrument_indices)
+            else:
+                indices_test = np.append(indices_test, next_instrument_indices)
+
+        np.random.shuffle(indices_train)
+        np.random.shuffle(indices_val)
+        np.random.shuffle(indices_test)
+
     elif mode == "segment-instruments-manual":
-        train_instruments = ["AkPnBcht", "AkPnBsdf", "grand-closed", "grand-removed", "grand-open",
-                             "upright-open", "upright-semiopen", "upright-closed"]
-        val_instruments = ["StbgTGd2", "AkPnCGdD", "ENSTDkCl"]
-        test_instruments = ["AkPnStgb", "SptkBGAm", "ENSTDkAm"]
+        # train_instruments = ["AkPnBcht", "AkPnBsdf", "grand-closed", "grand-removed", "grand-open",
+        #                      "upright-open", "upright-semiopen", "upright-closed"]
+        # val_instruments = ["StbgTGd2", "AkPnCGdD", "ENSTDkCl"]
+        # test_instruments = ["AkPnStgb", "SptkBGAm", "ENSTDkAm"]
+        train_instruments = ["Nord_BrightGrand-XL",         "Nord_AmberUpright-XL",
+                             "Nord_ConcertGrand1Amb-Lrg",   "Nord_BabyUpright-XL",
+                             "Nord_GrandImperial-XL",       "Nord_BlackUpright-Lrg",
+                             "Nord_GrandLadyD-Lrg",         "Nord_BlueSwede-Lrg",
+                             "Nord_RoyalGrand3D-XL",        "Nord_MellowUpright-XL",
+                             "Nord_SilverGrand-XL",         "Nord_QueenUpright-Lrg",
+                             "Nord_StudioGrand1-Lrg",       "Nord_RainPiano-Lrg"]
+        val_instruments =   ["Nord_ItalianGrand-XL",        "Nord_GrandUpright-XL",
+                             "Nord_StudioGrand2-Lrg"]
+        test_instruments =  ["Nord_VelvetGrand-XL",         "Nord_RomanticUpright-Lrg",
+                             "Nord_WhiteGrand-XL",          "Nord_SaloonUpright-Lrg",
+                             "Nord_ConcertGrand1-Lrg",      "Nord_BambinoUpright-XL"]
 
         indices_train = np.asarray(data.instrument.isin(train_instruments)).nonzero()[0]
         indices_val = np.asarray(data.instrument.isin(val_instruments)).nonzero()[0]
@@ -208,12 +254,12 @@ def evaluate_CNN(evaluated_model, test_set):
     return overall_scores
 
 
-def cross_validate(cnn_type, total_train_set, partition_mode="segment_instruments"):
-    set_1, set_2, _ = generate_split_indices(total_train_set, partition_ratios=[0.5, 0.5], mode=partition_mode)
+def cross_validate(cnn_type, total_seen_dataset, partition_mode):
+    set_1, set_2, _ = generate_split_indices(total_seen_dataset.dataframe, partition_ratios=[0.5, 0.5], mode=partition_mode)
 
     # Perform fold 1 training and evaluation
-    train_cv1 = DataLoader(dataset_seen, batch_size=batch_size, shuffle=False, sampler=sampler.SubsetRandomSampler(set_1))
-    val_cv1 = DataLoader(dataset_seen, batch_size=batch_size, shuffle=False, sampler=sampler.SubsetRandomSampler(set_2))
+    train_cv1 = DataLoader(total_seen_dataset, batch_size=batch_size, shuffle=False, sampler=sampler.SubsetRandomSampler(set_1))
+    val_cv1 = DataLoader(total_seen_dataset, batch_size=batch_size, shuffle=False, sampler=sampler.SubsetRandomSampler(set_2))
     model_cv1 = train_model(cnn_type=cnn_type, train_set=train_cv1, val_set=val_cv1, plot_title="CV Fold 1")
     scores_cv1 = evaluate_CNN(model_cv1, val_cv1)
     print("\n------Fold 1 validation set scores--------")
@@ -222,8 +268,8 @@ def cross_validate(cnn_type, total_train_set, partition_mode="segment_instrument
     print("F1 score:", np.round(scores_cv1["F1"], 2))
 
     # Perform fold 2 training and evaluation
-    train_cv2 = DataLoader(dataset_seen, batch_size=batch_size, shuffle=False, sampler=sampler.SubsetRandomSampler(set_2))
-    val_cv2 = DataLoader(dataset_seen, batch_size=batch_size, shuffle=False, sampler=sampler.SubsetRandomSampler(set_1))
+    train_cv2 = DataLoader(total_seen_dataset, batch_size=batch_size, shuffle=False, sampler=sampler.SubsetRandomSampler(set_2))
+    val_cv2 = DataLoader(total_seen_dataset, batch_size=batch_size, shuffle=False, sampler=sampler.SubsetRandomSampler(set_1))
     model_cv2 = train_model(cnn_type=cnn_type, train_set=train_cv2, val_set=val_cv2, plot_title="CV Fold 2")
     scores_cv2 = evaluate_CNN(model_cv2, val_cv2)
     print("\n------Fold 2 validation set scores--------")
@@ -259,56 +305,49 @@ if __name__ == '__main__':
     data_seen = total_data[total_data.dataset == "MIDIsampled"]
     data_unseen = total_data[total_data.dataset != "MIDIsampled"]
 
-    partition_mode = "segment-velocities"
-
     dataset_seen = TimbreDataset(data_seen)
-    train_indices, val_indices, test_indices = generate_split_indices(data_seen, partition_ratios=[0.7, 0.1],
+
+    partition_mode = "segment-instruments-random-balanced"
+    train_indices, val_indices, _ = generate_split_indices(data_seen, partition_ratios=[0.8, 0.2],
                                                                       mode=partition_mode)
     loader_train = DataLoader(dataset_seen, batch_size=batch_size, shuffle=False,
                               sampler=sampler.SubsetRandomSampler(train_indices))
     loader_val = DataLoader(dataset_seen, batch_size=batch_size, shuffle=False,
                             sampler=sampler.SubsetRandomSampler(val_indices))
-    loader_test = DataLoader(dataset_seen, batch_size=batch_size, shuffle=False,
-                             sampler=sampler.SubsetRandomSampler(test_indices))
+    # loader_test = DataLoader(dataset_seen, batch_size=batch_size, shuffle=False,
+    #                          sampler=sampler.SubsetRandomSampler(test_indices))
 
-    # print("\n\n-----------------2-FOLD CROSS-VALIDATION-----------------")
-    # cross_validate(cnn_type=timbre_CNN_type,
-    #                total_train_set=data_seen.iloc[np.union1d(train_indices, val_indices)],
-    #                partition_mode=partition_mode)
+    if perform_cross_val:
+        print("\n\n-----------------2-FOLD CROSS-VALIDATION-----------------")
+        cross_validate(cnn_type=timbre_CNN_type,
+                       total_seen_dataset=dataset_seen,
+                       partition_mode=partition_mode)
 
-    saved_model_path = os.path.join(model_dir, timbre_CNN_type.__name__, "model_"+partition_mode+"_"+model_name+".pth")
+    print("\n\n-------------------RE-TRAINED MODEL-----------------------")
+    model_filename = "model_"+partition_mode+"_"+model_name+".pth"
+    saved_model_path = os.path.join(model_dir, timbre_CNN_type.__name__, model_filename)
     if not os.path.isfile(saved_model_path):
         print("\nCreating and training new model")
-        model = train_model(cnn_type=timbre_CNN_type, train_set=loader_train, val_set=loader_val, plot_title="Re-trained model")
+        model = train_model(cnn_type=timbre_CNN_type, train_set=loader_train, val_set=loader_val,
+                            plot_title="Re-trained model: "+model_filename)
         # Save model
         torch.save(model, saved_model_path)
         print("Saved trained model to", saved_model_path)
     else:
-        print("\nLoading model from", saved_model_path)
+        print("\nLoading pre-trained model from", saved_model_path)
         model = torch.load(saved_model_path)
     print(model)
     model.count_parameters()
 
-    print("\n\n-------------Evaluation on the seen test set-------------")
-    scores = evaluate_CNN(model, loader_test)
-    print("---Overall seen test set performance---")
-    print("Confusion matrix:\n", scores["Confusion"])
-    print("Accuracy:", np.round(scores["Accuracy"], 2))
-    print("F1 score:", np.round(scores["F1"], 2))
-    conf_plot = scores["Confusion_plot"].plot(cmap=plt.cm.Blues, colorbar=False)
-    conf_plot.ax_.set_title("Test set results: Confusion matrix")
-    plt.show()
+    print("\n\n-------------Evaluation on the validation set-------------")
+    scores_seen = evaluate_CNN(model, loader_val)
+    print("---Overall validation set performance---")
+    display_scores(scores_seen, "Validation set")
 
     print("\n\n--------------Evaluation on the unseen set---------------")
     dataset_unseen = TimbreDataset(data_unseen)
     loader_unseen = DataLoader(dataset_unseen, batch_size=batch_size, shuffle=False)
     scores_unseen = evaluate_CNN(model, loader_unseen)
     print("--------Overall unseen set performance--------")
-    print("Confusion matrix:\n", scores_unseen["Confusion"])
-    print("Accuracy:", np.round(scores_unseen["Accuracy"], 2))
-    print("F1 score:", np.round(scores_unseen["F1"], 2))
-    conf_plot = scores_unseen["Confusion_plot"].plot(cmap=plt.cm.Blues, colorbar=False)
-    conf_plot.ax_.set_title("Unseen set results: Confusion matrix")
-    plt.show()
-    print("")
+    display_scores(scores_unseen, "Unseen test set")
 

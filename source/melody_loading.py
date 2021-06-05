@@ -9,7 +9,7 @@ import scipy.io.wavfile
 
 
 signal_Fs = 44100
-midi_dir = "data/midi/sebasgverde_mono-midi-transposition/validation"                   # Input midi files directory
+midi_dir = "data/midi/sebasgverde_mono-midi-transposition/evaluation"                   # Input midi files directory
 melody_data_dir = os.path.join(pickled_data_dir, "melody_dataset", "melody_dataset_all_20_diff-melodies+MIDIsampled")    # Output pickle files directory
 no_melodies = 20   # Parameter to set how many midi files to use in dataset
 
@@ -219,6 +219,8 @@ class MelodyInstrumentLoader(InstrumentLoader):
             # Remove spectrograms of incorrect shape
             instrument_out = instrument_out[instrument_out["spectrogram"].map(np.shape) == (300, 221)]
 
+            # Remove any spectrograms that contain NaNs
+            instrument_out = instrument_out[instrument_out["spectrogram"].map(lambda spec: np.isfinite(spec).all())]
             # Convert instrument's label to binary, "Grand" = 0, "Upright" = 1
             instrument_out.label = instrument_out.label.replace("Grand", 0)
             instrument_out.label = instrument_out.label.replace("Upright", 1)
@@ -239,8 +241,6 @@ def sample_frames(signal, frame_len):
     else:
         raise Exception("Cannot sample frames from array of dimension > 2")
     return frames
-
-
 
 
 if __name__ == '__main__':

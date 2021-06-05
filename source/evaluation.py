@@ -15,3 +15,13 @@ def evaluate_scores(label, pred):
         f1 = None
         conf_plot = None
     return {"Confusion": conf, "Accuracy": acc, "F1": f1, "Confusion_plot": conf_plot}
+
+
+def display_scores(scores, name=""):
+    print("Confusion matrix:\n", scores["Confusion"])
+    print("Accuracy:", np.round(scores["Accuracy"], 2))
+    print("F1 score:", np.round(scores["F1"], 2))
+    conf_plot = scores["Confusion_plot"].plot(cmap=plt.cm.Blues, colorbar=False)
+    title_text = ": "+name
+    conf_plot.ax_.set_title("Confusion matrix"+title_text)
+    plt.show()
