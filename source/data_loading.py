@@ -3,13 +3,11 @@ import pandas as pd
 import os, io
 from zipfile import ZipFile
 import tarfile
-import py7zr
 import librosa
 import pickle
 import librosa.display
 import matplotlib.pyplot as plt
 from torch.utils.data import Dataset
-from scipy.io import wavfile
 import soundfile
 import sounddevice as sd
 import mido

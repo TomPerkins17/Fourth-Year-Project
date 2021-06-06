@@ -1,0 +1,11 @@
+matplotlib~=3.3.4
+numpy~=1.19.5
+scikit-learn~=0.24.1
+torch~=1.8.1+cu111
+prettytable~=2.0.0
+pandas~=1.1.5
+librosa~=0.8.0
+SoundFile~=0.10.3.post1
+sounddevice~=0.4.1
+mido~=1.2.10
+scipy~=1.5.4
