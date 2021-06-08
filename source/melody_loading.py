@@ -74,8 +74,8 @@ class SignalWriter:
 
 
 class MelodyInstrumentLoader(InstrumentLoader):
-    def __init__(self, data_dir, note_range=None, set_velocity=None, normalise_wavs=True, load_MIDIsampled=True):
-        super().__init__(data_dir, note_range, set_velocity, normalise_wavs, load_MIDIsampled)
+    def __init__(self, data_dir, note_range=None, set_velocity=None, normalise_wavs=True, load_MIDIsampled=True, reload_wavs=False):
+        super().__init__(data_dir, note_range, set_velocity, normalise_wavs, load_MIDIsampled, reload_wavs)
         self.avg_note_lengths = []
 
     def sequence_melody(self, midi_path, sample_instrument):
@@ -160,7 +160,10 @@ class MelodyInstrumentLoader(InstrumentLoader):
     def preprocess_melodies(self, midi_dir, normalisation=None):
         out = []
         i = 0
-        for instrument_name in pd.unique(self.dataset.instrument):
+        # If single-note wavs don't exist, we assume pre-processed pickles are available in melody_data_dir
+        instrument_list = [os.path.splitext(f)[0] for f in os.listdir(melody_data_dir)] if self.dataset.empty \
+            else pd.unique(self.dataset.instrument)
+        for instrument_name in instrument_list:
             instrument_pkl_path = os.path.join(melody_data_dir, instrument_name+".pkl")
             if not os.path.isfile(instrument_pkl_path):
                 instrument_samples = self.dataset.loc[self.dataset.instrument == instrument_name]
@@ -212,6 +215,7 @@ class MelodyInstrumentLoader(InstrumentLoader):
                     print("\t yielding", 2.21/max_avg_note_len, "notes per 2.21 s window\n")
                     self.avg_note_lengths = []
                 instrument_out.to_pickle(instrument_pkl_path)
+                print("Saved pickle to", instrument_pkl_path)
             else:
                 print("Loading pickle from", instrument_pkl_path)
                 instrument_out = pd.read_pickle(instrument_pkl_path)

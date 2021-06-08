@@ -2,6 +2,7 @@
 import warnings
 import sklearn
 import pandas as pd
+import gc
 
 from data_loading import *
 from timbre_CNN import *
@@ -9,17 +10,22 @@ from evaluation import *
 from torch.utils.data import DataLoader, sampler
 from melody_loading import *
 
+result_dir = "results"
 model_dir = "models"
-model_name = "MIDIsampledseen_evalmode_attempt2"
+model_name = "MIDIsampledseen_evalmode"
 val_interval = 5
 perform_cross_val = True
 evaluation_bs = 512
 
 # Hyperparameters
-batch_size = 256
-epochs = 20
-learning_rate = 0.002
-loss_function = nn.BCELoss()
+hyperparams_single = {"batch_size": 256,  # GPU memory limits us to <512
+                      "epochs": 25,
+                      "learning_rate": 0.002,
+                      "loss_function": nn.BCELoss()}
+hyperparams_melody = {"batch_size": 256,  # GPU memory limits us to <512
+                      "epochs": 25,
+                      "learning_rate": 0.002,
+                      "loss_function": nn.BCELoss()}
 
 
 def generate_split_indices(data, partition_ratios=None, mode="mixed", seed=None):
@@ -180,6 +186,55 @@ def generate_split_indices(data, partition_ratios=None, mode="mixed", seed=None)
     return indices_train, indices_val, indices_test
 
 
+def generate_crossval_4fold_indices(data, seed=None):
+    rng = np.random.default_rng(seed=seed)
+    instruments_grand = data[data.label == 0].instrument.unique()
+    instruments_upright = data[data.label == 1].instrument.unique()
+    rng.shuffle(instruments_grand)
+    rng.shuffle(instruments_upright)
+    num_instruments_fold1 = np.round(0.25 * len(data.instrument.unique()))
+    num_instruments_fold2 = np.round(0.25 * len(data.instrument.unique()))
+    num_instruments_fold3 = np.round(0.25 * len(data.instrument.unique()))
+    indices_fold1 = []
+    indices_fold2 = []
+    indices_fold3 = []
+    indices_fold4 = []
+    i_grand = 0
+    i_upright = 0
+
+    for i in range(0, len(data.instrument.unique())):
+        if i % 2 and i_upright < len(instruments_upright):
+            next_instrument_indices = np.asarray(data.instrument == instruments_upright[i_upright]).nonzero()[0]
+            i_upright += 1
+        elif i_grand < len(instruments_grand):
+            next_instrument_indices = np.asarray(data.instrument == instruments_grand[i_grand]).nonzero()[0]
+            i_grand += 1
+        else:
+            break
+        if i < num_instruments_fold1:
+            indices_fold1 = np.append(indices_fold1, next_instrument_indices)
+        elif i < num_instruments_fold1 + num_instruments_fold2:
+            indices_fold2 = np.append(indices_fold2, next_instrument_indices)
+        elif i < num_instruments_fold1 + num_instruments_fold2 + num_instruments_fold3:
+            indices_fold3 = np.append(indices_fold3, next_instrument_indices)
+        else:
+            indices_fold4 = np.append(indices_fold4, next_instrument_indices)
+    np.random.shuffle(indices_fold1)
+    np.random.shuffle(indices_fold2)
+    np.random.shuffle(indices_fold3)
+
+    print(len(indices_fold1), "samples in fold 1")
+    print("\t", pd.unique(data.iloc[indices_fold1].instrument))
+    print(len(indices_fold2), "samples in fold 2")
+    print("\t", pd.unique(data.iloc[indices_fold2].instrument))
+    print(len(indices_fold3), "samples in fold 3")
+    print("\t", pd.unique(data.iloc[indices_fold3].instrument))
+    print(len(indices_fold4), "samples in fold 4")
+    print("\t", pd.unique(data.iloc[indices_fold4].instrument))
+
+    return indices_fold1.astype(int), indices_fold2.astype(int), indices_fold3.astype(int), indices_fold4.astype(int)
+
+
 def train_model(cnn_type, train_set, val_set, plot_title=""):
     print("\n--------------TRAINING MODEL--------------")
     model = cnn_type().to(device, non_blocking=True)
@@ -203,6 +258,7 @@ def train_model(cnn_type, train_set, val_set, plot_title=""):
                 loss.backward()
                 optimizer.step()
                 running_loss += loss.detach()
+                gc.collect()
             # Record training loss
             mean_epoch_loss = (running_loss/(batch_size*(i+1))).item()
             print("+Training - Epoch", epoch+1, "loss:", mean_epoch_loss)
@@ -218,6 +274,7 @@ def train_model(cnn_type, train_set, val_set, plot_title=""):
                         label = batch[1].float().to(device, non_blocking=True)
                         y = model(x)
                         loss_val += loss_function(y, label).detach()
+                        gc.collect()
                 mean_epoch_val_loss = (loss_val / (batch_size * (i + 1))).item()
                 print("\t+Validation - Epoch", epoch + 1, "loss:", mean_epoch_val_loss)
                 loss_val_log.append(mean_epoch_val_loss)
@@ -250,7 +307,7 @@ def evaluate_CNN(evaluated_model, test_set):
             x = batch[0].float().to(device, non_blocking=True)
             label = batch[1].float().to(device, non_blocking=True)
             y = evaluated_model(x)
-            print("+Evaluating - Batch loss:", loss_function(y, label).item())
+            #print("+Evaluating - Batch loss:", loss_function(y, label).item())
             pred = torch.round(y)
             # Accumulate per-batch ground truths, outputs and instrument names
             labels_total = np.append(labels_total, label.cpu())
@@ -266,27 +323,69 @@ def evaluate_CNN(evaluated_model, test_set):
         per_inst_scores = per_inst_scores.append(pd.DataFrame([[np.round(instrument_scores["Accuracy"],2),piano_class]],
                                                               index=pd.Index([instrument], name="Instrument"),
                                                               columns=["Accuracy", "Class"]))
-    print("---------Per-instrument scores---------")
-    print(per_inst_scores)
     # Calculate overall scores
     overall_scores = evaluate_scores(labels_total, preds_total)
-    return overall_scores
+    return overall_scores, per_inst_scores
 
 
-def cross_validate_2fold(cnn_type, cross_val_subset_2fold, partition_mode):
-    set_1, set_2, _ = generate_split_indices(cross_val_subset_2fold, partition_ratios=[0.5, 0.5], mode=partition_mode)
-    cv_dataset = TimbreDataset(cross_val_subset_2fold)
+def cross_validate(cnn_type, cross_val_subset, cv_mode="2fold", partition_mode=None):
 
+    cv_dataset = TimbreDataset(cross_val_subset)
     total_scores = pd.DataFrame()
-    for fold, (train_fold_indices, val_fold_indices) in enumerate(zip([set_1, set_2], [set_2, set_1])):
+
+    if cv_mode == "2fold":
+        set_1, set_2, _ = generate_split_indices(cross_val_subset, partition_ratios=[0.5, 0.5], mode=partition_mode)
+        training_sets = [set_1, set_2]
+        validation_sets = [set_2, set_1]
+    elif cv_mode == "4fold":
+        fold1, fold2, fold3, fold4 = generate_crossval_4fold_indices(cross_val_subset, seed=None)
+        training_sets = [np.concatenate([fold2, fold3, fold4]).astype(int),
+                         np.concatenate([fold3, fold4, fold1]).astype(int),
+                         np.concatenate([fold4, fold1, fold2]).astype(int),
+                         np.concatenate([fold1, fold2, fold3]).astype(int)]
+        validation_sets = [fold1, fold2, fold3, fold4]
+    else:
+        raise Exception("CV mode "+cv_mode+" not implemented")
+
+    for fold, (train_fold_indices, val_fold_indices) in enumerate(zip(training_sets, validation_sets)):
         train_fold = DataLoader(cv_dataset, batch_size=batch_size, shuffle=False,
                                 sampler=sampler.SubsetRandomSampler(train_fold_indices), pin_memory=True)
         val_fold = DataLoader(cv_dataset, batch_size=evaluation_bs, shuffle=False,
                               sampler=sampler.SubsetRandomSampler(val_fold_indices), pin_memory=True)
         model_fold, _ = train_model(cnn_type=cnn_type, train_set=train_fold, val_set=val_fold,
                                     plot_title="CV Fold "+str(fold+1))
-        scores_fold = evaluate_CNN(model_fold, val_fold)
+        scores_fold, per_inst_scores_fold = evaluate_CNN(model_fold, val_fold)
         print("\n------Fold "+str(fold+1)+" validation set scores--------")
+        print(per_inst_scores_fold)
+        print("Confusion matrix:\n", scores_fold["Confusion"])
+        print("Accuracy:", np.round(scores_fold["Accuracy"], 2))
+        print("F1 score:", np.round(scores_fold["F1"], 2))
+        numeric_scores_fold = {k: [v] for k, v in scores_fold.items() if k in ["Accuracy", "F1"]}
+        total_scores = total_scores.append(pd.DataFrame.from_dict(numeric_scores_fold))
+    print("\n-------Overall cross-validation scores-------")
+    mean_scores = total_scores.mean()
+    print(mean_scores)
+
+
+def cross_validate_4fold(cnn_type, cross_val_subset_4fold):
+    fold1, fold2, fold3, fold4 = generate_crossval_4fold_indices(cross_val_subset_4fold, seed=None)
+    cv_dataset = TimbreDataset(cross_val_subset_4fold)
+    total_scores = pd.DataFrame()
+    training_sets = [np.concatenate([fold2, fold3, fold4]),
+                     np.concatenate([fold3, fold4, fold1]),
+                     np.concatenate([fold4, fold1, fold2]),
+                     np.concatenate([fold1, fold2, fold3])]
+    validation_sets = [fold1, fold2, fold3, fold4]
+    for fold, (train_fold_indices, val_fold_indices) in enumerate(zip(training_sets, validation_sets)):
+        train_fold = DataLoader(cv_dataset, batch_size=batch_size, shuffle=False,
+                                sampler=sampler.SubsetRandomSampler(train_fold_indices), pin_memory=True)
+        val_fold = DataLoader(cv_dataset, batch_size=evaluation_bs, shuffle=False,
+                              sampler=sampler.SubsetRandomSampler(val_fold_indices), pin_memory=True)
+        model_fold, _ = train_model(cnn_type=cnn_type, train_set=train_fold, val_set=val_fold,
+                                    plot_title="CV Fold " + str(fold + 1))
+        scores_fold, per_inst_scores_fold = evaluate_CNN(model_fold, val_fold)
+        print("\n------Fold " + str(fold + 1) + " validation set scores--------")
+        print(per_inst_scores_fold)
         print("Confusion matrix:\n", scores_fold["Confusion"])
         print("Accuracy:", np.round(scores_fold["Accuracy"], 2))
         print("F1 score:", np.round(scores_fold["F1"], 2))
@@ -305,16 +404,28 @@ if __name__ == '__main__':
         print("GPU:", torch.cuda.get_device_name(0))
 
     print("\n\n----------------------LOADING DATA-----------------------")
-    # timbre_CNN_type = SingleNoteTimbreCNN
-    # loader = InstrumentLoader(data_dir, note_range=[48, 72], set_velocity=None, normalise_wavs=True, load_MIDIsampled=True)
-    # total_data = loader.preprocess(fmin=20, fmax=20000, n_mels=300, normalisation="statistics")
-    timbre_CNN_type = MelodyTimbreCNN
-    loader = MelodyInstrumentLoader(data_dir, note_range=[48, 72], set_velocity=None, normalise_wavs=True, load_MIDIsampled=True)
-    total_data = loader.preprocess_melodies(midi_dir, normalisation="statistics")
+    timbre_CNN_type = SingleNoteTimbreCNN
+    #timbre_CNN_type = MelodyTimbreCNN
+    if timbre_CNN_type == SingleNoteTimbreCNN:
+        hyperparams = hyperparams_single
+        loader = InstrumentLoader(data_dir, note_range=[48, 72], set_velocity=None, normalise_wavs=True, load_MIDIsampled=True)
+        total_data = loader.preprocess(fmin=20, fmax=20000, n_mels=300, normalisation="statistics")
+    elif timbre_CNN_type == MelodyTimbreCNN:
+        hyperparams = hyperparams_melody
+        loader = MelodyInstrumentLoader(data_dir, note_range=[48, 72], set_velocity=None, normalise_wavs=True, load_MIDIsampled=True)
+        total_data = loader.preprocess_melodies(midi_dir, normalisation="statistics")
+    else:
+        raise Exception(str(timbre_CNN_type)+" doesn't exist")
+
+    batch_size = hyperparams["batch_size"]
+    epochs = hyperparams["epochs"]
+    learning_rate = hyperparams["learning_rate"]
+    loss_function = hyperparams["loss_function"]
 
     # Split into seen and unseen subsets
     data_seen = total_data[total_data.dataset == "MIDIsampled"]
     data_unseen = total_data[total_data.dataset != "MIDIsampled"]
+    gc.collect()
 
     dataset_seen = TimbreDataset(data_seen)
 
@@ -328,10 +439,11 @@ if __name__ == '__main__':
                             pin_memory=True)
 
     if perform_cross_val:
-        print("\n\n-----------------2-FOLD CROSS-VALIDATION-----------------")
-        cross_validate_2fold(cnn_type=timbre_CNN_type,
-                             cross_val_subset_2fold=data_seen.iloc[train_indices],
-                             partition_mode="segment-instruments-random-balanced")
+        print("\n\n---------------------CROSS-VALIDATION---------------------")
+        cross_validate(cnn_type=timbre_CNN_type,
+                       cross_val_subset=data_seen.iloc[train_indices],
+                       cv_mode="4fold",
+                       partition_mode="segment-instruments-random-balanced")
 
     print("\n\n-------------------RE-TRAINED MODEL-----------------------")
     model_filename = "model_"+str(batch_size)+"_"+str(epochs)+"_"+str(learning_rate)+"_"+model_name
@@ -352,14 +464,20 @@ if __name__ == '__main__':
     model.count_parameters()
 
     print("\n\n-------------Evaluation on the validation set-------------")
-    scores_seen = evaluate_CNN(model, loader_val)
+    scores_seen, per_inst_scores_seen = evaluate_CNN(model, loader_val)
+    print("---------Per-instrument scores---------")
+    print(per_inst_scores_seen)
+    per_inst_scores_seen.to_csv(os.path.join(result_dir, timbre_CNN_type.__name__, model_filename + ".csv"))
     print("---Overall validation set performance---")
     display_scores(scores_seen, "Validation set")
 
     print("\n\n--------------Evaluation on the unseen set---------------")
     dataset_unseen = TimbreDataset(data_unseen)
     loader_unseen = DataLoader(dataset_unseen, batch_size=evaluation_bs, shuffle=False, pin_memory=True)
-    scores_unseen = evaluate_CNN(model, loader_unseen)
+    scores_unseen, per_inst_scores_unseen = evaluate_CNN(model, loader_unseen)
+    print("---------Per-instrument scores---------")
+    print(per_inst_scores_unseen)
+    per_inst_scores_unseen.to_csv(os.path.join(result_dir, timbre_CNN_type.__name__, model_filename + ".csv"), mode="a")
     print("--------Overall unseen set performance--------")
     display_scores(scores_unseen, "Unseen test set")
 

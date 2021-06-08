@@ -19,7 +19,8 @@ sample_new_midi_inst = False
 
 
 class InstrumentLoader:
-    def __init__(self, data_dir, note_range=None, set_velocity=None, normalise_wavs=True, load_MIDIsampled=True):
+    def __init__(self, data_dir, note_range=None, set_velocity=None, normalise_wavs=True, load_MIDIsampled=True,
+                 reload_wavs=False):
         # midi_range, if specified, restricts the notes used in the dataset
         #   C3 to C5 (2 octaves centred around middle C): MIDI 48-72
         # velocity, if specified, restricts the velocities to medium
@@ -40,36 +41,38 @@ class InstrumentLoader:
         self.melspec_pkl = os.path.join(pickled_data_dir, "single-note_dataset", "preprocessed",
                                         "melspec_preprocessed"+"_"+normalisedwavs_field+"_"+velocity_field+MIDIsampled_field+".pkl")
 
-        if not os.path.isfile(MAPS_pkl):
-            print(MAPS_pkl, "not found, loading dataset manually")
-            dataset_MAPS = self.load_MAPS(self.note_range, self.set_velocity, normalise=normalise_wavs)
-            dataset_MAPS.to_pickle(MAPS_pkl)
-            print("Pickle saved as", MAPS_pkl)
-        else:
-            print("Loading pickle from", MAPS_pkl)
-            dataset_MAPS = pd.read_pickle(MAPS_pkl)
-        self.dataset = self.dataset.append(dataset_MAPS)
+        # Speed up loading and reduce mem usage when pre-processed pickles are already available and wavs not needed
+        if reload_wavs:
+            if not os.path.isfile(MAPS_pkl):
+                print(MAPS_pkl, "not found, loading dataset manually")
+                dataset_MAPS = self.load_MAPS(self.note_range, self.set_velocity, normalise=normalise_wavs)
+                dataset_MAPS.to_pickle(MAPS_pkl)
+                print("Pickle saved as", MAPS_pkl)
+            else:
+                print("Loading pickle from", MAPS_pkl)
+                dataset_MAPS = pd.read_pickle(MAPS_pkl)
+            self.dataset = self.dataset.append(dataset_MAPS)
 
-        if not os.path.isfile(BiVib_pkl):
-            print(BiVib_pkl, "not found, loading dataset manually")
-            dataset_BiVib = self.load_BiVib(self.note_range, self.set_velocity, normalise=normalise_wavs)
-            dataset_BiVib.to_pickle(BiVib_pkl)
-            print("Pickle saved as", BiVib_pkl)
-        else:
-            print("Loading pickle from", BiVib_pkl)
-            dataset_BiVib = pd.read_pickle(BiVib_pkl)
-        self.dataset = self.dataset.append(dataset_BiVib)
+            if not os.path.isfile(BiVib_pkl):
+                print(BiVib_pkl, "not found, loading dataset manually")
+                dataset_BiVib = self.load_BiVib(self.note_range, self.set_velocity, normalise=normalise_wavs)
+                dataset_BiVib.to_pickle(BiVib_pkl)
+                print("Pickle saved as", BiVib_pkl)
+            else:
+                print("Loading pickle from", BiVib_pkl)
+                dataset_BiVib = pd.read_pickle(BiVib_pkl)
+            self.dataset = self.dataset.append(dataset_BiVib)
 
-        if load_MIDIsampled:
-            dataset_MIDIsampled = self.load_MIDIsampled_dataset(pkl_dir="data/single-note_dataset/MIDIsampled", note_range=note_range, sample_new=sample_new_midi_inst)
-            self.dataset = self.dataset.append(dataset_MIDIsampled)
+            if load_MIDIsampled:
+                dataset_MIDIsampled = self.load_MIDIsampled_dataset(pkl_dir="data/single-note_dataset/MIDIsampled", note_range=note_range, sample_new=sample_new_midi_inst)
+                self.dataset = self.dataset.append(dataset_MIDIsampled)
 
     def load_MAPS(self, note_range, set_velocity, normalise):
         # Types of each piano
         inst_types = {"AkPnBcht": "Grand",
                       "AkPnBsdf": "Grand",
                       "AkPnCGdD": "Grand",
-                      "AkPnStgb": "Grand",
+                      "AkPnStgb": "Upright",
                       "SptkBGAm": "Grand",
                       "StbgTGd2": "Grand",
                       "ENSTDkAm": "Upright",
@@ -378,8 +381,8 @@ class InstrumentLoader:
                    fmin=20, fmax=20000,     # 20-8000 Hz is piano's perceptible range
                    vel_stack=False, pad=True,
                    normalisation="statistics",
-                   plot=False):
-        if not os.path.isfile(self.melspec_pkl):
+                   plot=False, reload_melspec=False):
+        if (not os.path.isfile(self.melspec_pkl)) or reload_melspec:
             print(self.melspec_pkl, "not found, pre-processing dataset manually")
 
             max_len = len(max(self.dataset["waveform"], key=len))
@@ -487,7 +490,7 @@ def plot_filterbank(spec_params):
 
     filterbank = librosa.filters.mel(Fs, n_fft, n_mels=n_mels, fmin=fmin, fmax=fmax, norm=None)
     # Plotting the frequency mapping of the filterbank
-    plt.figure(figsize=(10, 5))
+    fig1 = plt.figure(figsize=(10, 5))
     img = librosa.display.specshow(filterbank, x_axis='linear', y_axis="mel", sr=Fs, fmin=fmin,
                                    fmax=fmax)
     plt.xlabel("STFT Frequencies (Hz)")
@@ -498,9 +501,9 @@ def plot_filterbank(spec_params):
 
     # Plotting each triangular filter's reponse:
     #  reference: https://stackoverflow.com/questions/40197060/librosa-mel-filter-bank-decreasing-triangles
-    plt.figure(figsize=(10, 5))
+    fig2 = plt.figure(figsize=(10, 5))
     plt.subplot(2, 1, 1)
-    plt.suptitle("Frequency response of the " + str(n_mels) + " Mel bank filters", size='x-large')
+    plt.suptitle("Details of the frequency response of a " + str(n_mels) + "-filter Mel filterbank", size='x-large')
     plt.subplots_adjust(hspace=0.5)
     plt.plot(np.linspace(fmin, fmax, int((n_fft / 2) + 1)), filterbank.T)
     plt.title("Detail: 5000 Hz to 7000 Hz")
@@ -510,12 +513,14 @@ def plot_filterbank(spec_params):
     plt.ylabel("Magnitude")
     plt.subplot(2, 1, 2)
     plt.plot(np.linspace(fmin, fmax, int((n_fft / 2) + 1)), filterbank.T)
-    plt.title("Detail: 13000 Hz to 15000 Hz")
+    plt.title("Detail: 15000 Hz to 17000 Hz")
     plt.ylim([0.00001, None])
     plt.xlim([15000, 17000])
     plt.xlabel("Frequency (Hz)")
     plt.ylabel("Magnitude")
     plt.show()
+    # fig1.savefig("../Figures/Mel_mapping.svg")
+    # fig2.savefig("../Figures/Mel_filterbank.svg")
 
 
 def plot_spectrogram(spectrogram, spec_params, name=""):
@@ -528,6 +533,8 @@ def plot_spectrogram(spectrogram, spec_params, name=""):
     fig.colorbar(img, ax=ax, format='%+2.0f dB')
     ax.set(title='Mel-frequency spectrogram: '+name)
     plt.show()
+    fig.savefig("../Figures/Sample_spectrogram.svg")
+    print("")
 
 
 class TimbreDataset(Dataset):
@@ -544,8 +551,14 @@ class TimbreDataset(Dataset):
 
 
 if __name__ == '__main__':
-    loader = InstrumentLoader(data_dir, note_range=[48, 72], set_velocity=None, normalise_wavs=True, load_MIDIsampled=True)
+    loader = InstrumentLoader(data_dir, note_range=[48, 72], set_velocity=None, normalise_wavs=True, load_MIDIsampled=True, reload_wavs=True)
+    melspec_data = loader.preprocess(fmin=20, fmax=20000, n_mels=300, normalisation="statistics", plot=False, reload_melspec=False)
 
-    # Shape: (1, 300, 221)
-    melspec_data = loader.preprocess(fmin=20, fmax=20000, n_mels=300, normalisation="statistics", plot=False)
+    sample_melspec = melspec_data.iloc[0].spectrogram
+    plot_spectrogram(sample_melspec, {"Fs": 44100,   # NOTE: this is the waveform's sample rate, not the spectrogram framerate.
+                           "framerate": 1 / 0.010,
+                           "fmin": 20,
+                           "fmax": 20000,
+                           "n_fft": 2048,
+                           "n_mels": 300})
     print("")
