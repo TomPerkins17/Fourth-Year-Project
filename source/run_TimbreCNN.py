@@ -22,6 +22,7 @@ hyperparams_single = {"batch_size": 256,  # GPU memory limits us to <512
                       "epochs": 25,
                       "learning_rate": 0.002,
                       "loss_function": nn.BCELoss()}
+
 hyperparams_melody = {"batch_size": 256,  # GPU memory limits us to <512
                       "epochs": 25,
                       "learning_rate": 0.002,
@@ -186,19 +187,21 @@ def generate_split_indices(data, partition_ratios=None, mode="mixed", seed=None)
     return indices_train, indices_val, indices_test
 
 
-def generate_crossval_4fold_indices(data, seed=None):
+def generate_crossval_fold_indices(data, seed=None):
     rng = np.random.default_rng(seed=seed)
     instruments_grand = data[data.label == 0].instrument.unique()
     instruments_upright = data[data.label == 1].instrument.unique()
     rng.shuffle(instruments_grand)
     rng.shuffle(instruments_upright)
-    num_instruments_fold1 = np.round(0.25 * len(data.instrument.unique()))
-    num_instruments_fold2 = np.round(0.25 * len(data.instrument.unique()))
-    num_instruments_fold3 = np.round(0.25 * len(data.instrument.unique()))
+    num_instruments_fold1 = np.round(len(data.instrument.unique())/5)
+    num_instruments_fold2 = np.round(len(data.instrument.unique())/5)
+    num_instruments_fold3 = np.round(len(data.instrument.unique())/5)
+    num_instruments_fold4 = np.round(len(data.instrument.unique())/5)
     indices_fold1 = []
     indices_fold2 = []
     indices_fold3 = []
     indices_fold4 = []
+    indices_fold5 = []
     i_grand = 0
     i_upright = 0
 
@@ -217,11 +220,15 @@ def generate_crossval_4fold_indices(data, seed=None):
             indices_fold2 = np.append(indices_fold2, next_instrument_indices)
         elif i < num_instruments_fold1 + num_instruments_fold2 + num_instruments_fold3:
             indices_fold3 = np.append(indices_fold3, next_instrument_indices)
-        else:
+        elif i < num_instruments_fold1 + num_instruments_fold2 + num_instruments_fold3 + num_instruments_fold4:
             indices_fold4 = np.append(indices_fold4, next_instrument_indices)
+        else:
+            indices_fold5 = np.append(indices_fold5, next_instrument_indices)
     np.random.shuffle(indices_fold1)
     np.random.shuffle(indices_fold2)
     np.random.shuffle(indices_fold3)
+    np.random.shuffle(indices_fold4)
+    np.random.shuffle(indices_fold5)
 
     print(len(indices_fold1), "samples in fold 1")
     print("\t", pd.unique(data.iloc[indices_fold1].instrument))
@@ -231,8 +238,10 @@ def generate_crossval_4fold_indices(data, seed=None):
     print("\t", pd.unique(data.iloc[indices_fold3].instrument))
     print(len(indices_fold4), "samples in fold 4")
     print("\t", pd.unique(data.iloc[indices_fold4].instrument))
+    print(len(indices_fold5), "samples in fold 5")
+    print("\t", pd.unique(data.iloc[indices_fold5].instrument))
 
-    return indices_fold1.astype(int), indices_fold2.astype(int), indices_fold3.astype(int), indices_fold4.astype(int)
+    return indices_fold1.astype(int), indices_fold2.astype(int), indices_fold3.astype(int), indices_fold4.astype(int), indices_fold5.astype(int)
 
 
 def train_model(cnn_type, train_set, val_set, plot_title=""):
@@ -337,13 +346,14 @@ def cross_validate(cnn_type, cross_val_subset, cv_mode="2fold", partition_mode=N
         set_1, set_2, _ = generate_split_indices(cross_val_subset, partition_ratios=[0.5, 0.5], mode=partition_mode)
         training_sets = [set_1, set_2]
         validation_sets = [set_2, set_1]
-    elif cv_mode == "4fold":
-        fold1, fold2, fold3, fold4 = generate_crossval_4fold_indices(cross_val_subset, seed=None)
-        training_sets = [np.concatenate([fold2, fold3, fold4]).astype(int),
-                         np.concatenate([fold3, fold4, fold1]).astype(int),
-                         np.concatenate([fold4, fold1, fold2]).astype(int),
-                         np.concatenate([fold1, fold2, fold3]).astype(int)]
-        validation_sets = [fold1, fold2, fold3, fold4]
+    elif cv_mode == "5fold":
+        fold1, fold2, fold3, fold4, fold5 = generate_crossval_fold_indices(cross_val_subset, seed=None)
+        training_sets = [np.concatenate([fold2, fold3, fold4, fold5]),
+                         np.concatenate([fold3, fold4, fold5, fold1]),
+                         np.concatenate([fold4, fold5, fold1, fold2]),
+                         np.concatenate([fold5, fold1, fold2, fold3]),
+                         np.concatenate([fold1, fold2, fold3, fold4])]
+        validation_sets = [fold1, fold2, fold3, fold4, fold5]
     else:
         raise Exception("CV mode "+cv_mode+" not implemented")
 
@@ -360,39 +370,13 @@ def cross_validate(cnn_type, cross_val_subset, cv_mode="2fold", partition_mode=N
         print("Confusion matrix:\n", scores_fold["Confusion"])
         print("Accuracy:", np.round(scores_fold["Accuracy"], 2))
         print("F1 score:", np.round(scores_fold["F1"], 2))
-        numeric_scores_fold = {k: [v] for k, v in scores_fold.items() if k in ["Accuracy", "F1"]}
-        total_scores = total_scores.append(pd.DataFrame.from_dict(numeric_scores_fold))
+        numeric_scores_fold = pd.DataFrame.from_dict({k: [v] for k, v in scores_fold.items() if k in ["Accuracy", "F1"]})
+        numeric_scores_fold["no_samples"] = len(val_fold_indices)
+        total_scores = total_scores.append(numeric_scores_fold)
     print("\n-------Overall cross-validation scores-------")
-    mean_scores = total_scores.mean()
-    print(mean_scores)
 
-
-def cross_validate_4fold(cnn_type, cross_val_subset_4fold):
-    fold1, fold2, fold3, fold4 = generate_crossval_4fold_indices(cross_val_subset_4fold, seed=None)
-    cv_dataset = TimbreDataset(cross_val_subset_4fold)
-    total_scores = pd.DataFrame()
-    training_sets = [np.concatenate([fold2, fold3, fold4]),
-                     np.concatenate([fold3, fold4, fold1]),
-                     np.concatenate([fold4, fold1, fold2]),
-                     np.concatenate([fold1, fold2, fold3])]
-    validation_sets = [fold1, fold2, fold3, fold4]
-    for fold, (train_fold_indices, val_fold_indices) in enumerate(zip(training_sets, validation_sets)):
-        train_fold = DataLoader(cv_dataset, batch_size=batch_size, shuffle=False,
-                                sampler=sampler.SubsetRandomSampler(train_fold_indices), pin_memory=True)
-        val_fold = DataLoader(cv_dataset, batch_size=evaluation_bs, shuffle=False,
-                              sampler=sampler.SubsetRandomSampler(val_fold_indices), pin_memory=True)
-        model_fold, _ = train_model(cnn_type=cnn_type, train_set=train_fold, val_set=val_fold,
-                                    plot_title="CV Fold " + str(fold + 1))
-        scores_fold, per_inst_scores_fold = evaluate_CNN(model_fold, val_fold)
-        print("\n------Fold " + str(fold + 1) + " validation set scores--------")
-        print(per_inst_scores_fold)
-        print("Confusion matrix:\n", scores_fold["Confusion"])
-        print("Accuracy:", np.round(scores_fold["Accuracy"], 2))
-        print("F1 score:", np.round(scores_fold["F1"], 2))
-        numeric_scores_fold = {k: [v] for k, v in scores_fold.items() if k in ["Accuracy", "F1"]}
-        total_scores = total_scores.append(pd.DataFrame.from_dict(numeric_scores_fold))
-    print("\n-------Overall cross-validation scores-------")
-    mean_scores = total_scores.mean()
+    mean_scores = {"Accuracy": (total_scores.Accuracy * total_scores.no_samples).sum() / total_scores.no_samples.sum(),
+                   "F1": (total_scores.F1 * total_scores.no_samples).sum() / total_scores.no_samples.sum()}
     print(mean_scores)
 
 
@@ -441,8 +425,8 @@ if __name__ == '__main__':
     if perform_cross_val:
         print("\n\n---------------------CROSS-VALIDATION---------------------")
         cross_validate(cnn_type=timbre_CNN_type,
-                       cross_val_subset=data_seen.iloc[train_indices],
-                       cv_mode="4fold",
+                       cross_val_subset=data_seen, #data_seen.iloc[train_indices],
+                       cv_mode="5fold",
                        partition_mode="segment-instruments-random-balanced")
 
     print("\n\n-------------------RE-TRAINED MODEL-----------------------")

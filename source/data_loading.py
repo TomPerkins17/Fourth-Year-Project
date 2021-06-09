@@ -533,8 +533,7 @@ def plot_spectrogram(spectrogram, spec_params, name=""):
     fig.colorbar(img, ax=ax, format='%+2.0f dB')
     ax.set(title='Mel-frequency spectrogram: '+name)
     plt.show()
-    fig.savefig("../Figures/Sample_spectrogram.svg")
-    print("")
+    #fig.savefig("../Figures/Sample_spectrogram.svg")
 
 
 class TimbreDataset(Dataset):
