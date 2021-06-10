@@ -16,6 +16,8 @@ model_name = "MIDIsampledseen_evalmode"
 val_interval = 5
 perform_cross_val = True
 evaluation_bs = 512
+timbre_CNN_type = SingleNoteTimbreCNN
+# timbre_CNN_type = MelodyTimbreCNN
 
 # Hyperparameters
 hyperparams_single = {"batch_size": 256,  # GPU memory limits us to <512
@@ -187,16 +189,16 @@ def generate_split_indices(data, partition_ratios=None, mode="mixed", seed=None)
     return indices_train, indices_val, indices_test
 
 
-def generate_crossval_fold_indices(data, seed=None):
+def generate_crossval_fold_indices(data, seed=None, folds=5):
     rng = np.random.default_rng(seed=seed)
     instruments_grand = data[data.label == 0].instrument.unique()
     instruments_upright = data[data.label == 1].instrument.unique()
     rng.shuffle(instruments_grand)
     rng.shuffle(instruments_upright)
-    num_instruments_fold1 = np.round(len(data.instrument.unique())/5)
-    num_instruments_fold2 = np.round(len(data.instrument.unique())/5)
-    num_instruments_fold3 = np.round(len(data.instrument.unique())/5)
-    num_instruments_fold4 = np.round(len(data.instrument.unique())/5)
+    num_instruments_fold1 = np.round(len(data.instrument.unique())/folds)
+    num_instruments_fold2 = np.round(len(data.instrument.unique())/folds)
+    num_instruments_fold3 = np.round(len(data.instrument.unique())/folds)
+    num_instruments_fold4 = np.round(len(data.instrument.unique())/folds)
     indices_fold1 = []
     indices_fold2 = []
     indices_fold3 = []
@@ -204,26 +206,44 @@ def generate_crossval_fold_indices(data, seed=None):
     indices_fold5 = []
     i_grand = 0
     i_upright = 0
-
-    for i in range(0, len(data.instrument.unique())):
-        if i % 2 and i_upright < len(instruments_upright):
-            next_instrument_indices = np.asarray(data.instrument == instruments_upright[i_upright]).nonzero()[0]
-            i_upright += 1
-        elif i_grand < len(instruments_grand):
-            next_instrument_indices = np.asarray(data.instrument == instruments_grand[i_grand]).nonzero()[0]
-            i_grand += 1
-        else:
-            break
-        if i < num_instruments_fold1:
-            indices_fold1 = np.append(indices_fold1, next_instrument_indices)
-        elif i < num_instruments_fold1 + num_instruments_fold2:
-            indices_fold2 = np.append(indices_fold2, next_instrument_indices)
-        elif i < num_instruments_fold1 + num_instruments_fold2 + num_instruments_fold3:
-            indices_fold3 = np.append(indices_fold3, next_instrument_indices)
-        elif i < num_instruments_fold1 + num_instruments_fold2 + num_instruments_fold3 + num_instruments_fold4:
-            indices_fold4 = np.append(indices_fold4, next_instrument_indices)
-        else:
-            indices_fold5 = np.append(indices_fold5, next_instrument_indices)
+    if folds == 5:
+        for i in range(0, len(data.instrument.unique())):
+            if i % 2 and i_upright < len(instruments_upright):
+                next_instrument_indices = np.asarray(data.instrument == instruments_upright[i_upright]).nonzero()[0]
+                i_upright += 1
+            elif i_grand < len(instruments_grand):
+                next_instrument_indices = np.asarray(data.instrument == instruments_grand[i_grand]).nonzero()[0]
+                i_grand += 1
+            else:
+                break
+            if i < num_instruments_fold1:
+                indices_fold1 = np.append(indices_fold1, next_instrument_indices).astype(int)
+            elif i < num_instruments_fold1 + num_instruments_fold2:
+                indices_fold2 = np.append(indices_fold2, next_instrument_indices).astype(int)
+            elif i < num_instruments_fold1 + num_instruments_fold2 + num_instruments_fold3:
+                indices_fold3 = np.append(indices_fold3, next_instrument_indices).astype(int)
+            elif i < num_instruments_fold1 + num_instruments_fold2 + num_instruments_fold3 + num_instruments_fold4:
+                indices_fold4 = np.append(indices_fold4, next_instrument_indices).astype(int)
+            else:
+                indices_fold5 = np.append(indices_fold5, next_instrument_indices).astype(int)
+    elif folds == 4:
+        for i in range(0, len(data.instrument.unique())):
+            if i % 2 and i_upright < len(instruments_upright):
+                next_instrument_indices = np.asarray(data.instrument == instruments_upright[i_upright]).nonzero()[0]
+                i_upright += 1
+            elif i_grand < len(instruments_grand):
+                next_instrument_indices = np.asarray(data.instrument == instruments_grand[i_grand]).nonzero()[0]
+                i_grand += 1
+            else:
+                break
+            if i < num_instruments_fold1:
+                indices_fold1 = np.append(indices_fold1, next_instrument_indices).astype(int)
+            elif i < num_instruments_fold1 + num_instruments_fold2:
+                indices_fold2 = np.append(indices_fold2, next_instrument_indices).astype(int)
+            elif i < num_instruments_fold1 + num_instruments_fold2 + num_instruments_fold3:
+                indices_fold3 = np.append(indices_fold3, next_instrument_indices).astype(int)
+            else:
+                indices_fold4 = np.append(indices_fold4, next_instrument_indices).astype(int)
     np.random.shuffle(indices_fold1)
     np.random.shuffle(indices_fold2)
     np.random.shuffle(indices_fold3)
@@ -238,13 +258,14 @@ def generate_crossval_fold_indices(data, seed=None):
     print("\t", pd.unique(data.iloc[indices_fold3].instrument))
     print(len(indices_fold4), "samples in fold 4")
     print("\t", pd.unique(data.iloc[indices_fold4].instrument))
-    print(len(indices_fold5), "samples in fold 5")
-    print("\t", pd.unique(data.iloc[indices_fold5].instrument))
+    if folds == 5:
+        print(len(indices_fold5), "samples in fold 5")
+        print("\t", pd.unique(data.iloc[indices_fold5].instrument))
 
-    return indices_fold1.astype(int), indices_fold2.astype(int), indices_fold3.astype(int), indices_fold4.astype(int), indices_fold5.astype(int)
+    return indices_fold1, indices_fold2, indices_fold3, indices_fold4, indices_fold5
 
 
-def train_model(cnn_type, train_set, val_set, plot_title=""):
+def train_model(cnn_type, train_set, val_set=None, plot_title=""):
     print("\n--------------TRAINING MODEL--------------")
     model = cnn_type().to(device, non_blocking=True)
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
@@ -292,12 +313,13 @@ def train_model(cnn_type, train_set, val_set, plot_title=""):
     # Plot training curves
     fig = plt.figure()
     plt.plot(range(1, epochs + 1), loss_train_log, c='r', label='train')
-    plt.plot(epoch_val_log, loss_val_log, c='b', label='val')
+    if val_set is not None:
+        plt.plot(epoch_val_log, loss_val_log, c='b', label='val')
     plt.legend()
     plt.xlabel('epoch')
     plt.ylabel('loss')
     plt.grid()
-    plt.title("Loss curves over "+str(epochs)+" epochs of training - "+plot_title)
+    plt.title("Loss curve over "+str(epochs)+" epochs of training - "+plot_title)
     plt.show()
 
     return model, fig
@@ -326,7 +348,7 @@ def evaluate_CNN(evaluated_model, test_set):
     per_inst_scores = pd.DataFrame()
     for instrument in np.unique(instruments_acc):
         instrument_mask = np.nonzero(instruments_acc == instrument)
-        # Ignore Confusion matrix and F1 score which are irrelevant here
+        # Ignore Confusion matrix, balanced accuracy and F1 score which are irrelevant here
         instrument_scores = evaluate_scores(labels_total[instrument_mask], preds_total[instrument_mask])
         piano_class = "Upright" if labels_total[instrument_mask][0] else "Grand"
         per_inst_scores = per_inst_scores.append(pd.DataFrame([[np.round(instrument_scores["Accuracy"],2),piano_class]],
@@ -337,17 +359,24 @@ def evaluate_CNN(evaluated_model, test_set):
     return overall_scores, per_inst_scores
 
 
-def cross_validate(cnn_type, cross_val_subset, cv_mode="2fold", partition_mode=None):
+def cross_validate(cnn_type, cross_val_subset, cv_folds=2, partition_mode=None):
 
     cv_dataset = TimbreDataset(cross_val_subset)
     total_scores = pd.DataFrame()
 
-    if cv_mode == "2fold":
+    if cv_folds == 2:
         set_1, set_2, _ = generate_split_indices(cross_val_subset, partition_ratios=[0.5, 0.5], mode=partition_mode)
         training_sets = [set_1, set_2]
         validation_sets = [set_2, set_1]
-    elif cv_mode == "5fold":
-        fold1, fold2, fold3, fold4, fold5 = generate_crossval_fold_indices(cross_val_subset, seed=None)
+    elif cv_folds == 4:
+        fold1, fold2, fold3, fold4, _ = generate_crossval_fold_indices(cross_val_subset, folds=cv_folds, seed=None)
+        training_sets = [np.concatenate([fold2, fold3, fold4]),
+                         np.concatenate([fold3, fold4, fold1]),
+                         np.concatenate([fold4, fold1, fold2]),
+                         np.concatenate([fold1, fold2, fold3])]
+        validation_sets = [fold1, fold2, fold3, fold4]
+    elif cv_folds == 5:
+        fold1, fold2, fold3, fold4, fold5 = generate_crossval_fold_indices(cross_val_subset, folds=cv_folds, seed=None)
         training_sets = [np.concatenate([fold2, fold3, fold4, fold5]),
                          np.concatenate([fold3, fold4, fold5, fold1]),
                          np.concatenate([fold4, fold5, fold1, fold2]),
@@ -355,7 +384,7 @@ def cross_validate(cnn_type, cross_val_subset, cv_mode="2fold", partition_mode=N
                          np.concatenate([fold1, fold2, fold3, fold4])]
         validation_sets = [fold1, fold2, fold3, fold4, fold5]
     else:
-        raise Exception("CV mode "+cv_mode+" not implemented")
+        raise Exception("CV mode "+str(cv_folds)+" not implemented")
 
     for fold, (train_fold_indices, val_fold_indices) in enumerate(zip(training_sets, validation_sets)):
         train_fold = DataLoader(cv_dataset, batch_size=batch_size, shuffle=False,
@@ -370,14 +399,22 @@ def cross_validate(cnn_type, cross_val_subset, cv_mode="2fold", partition_mode=N
         print("Confusion matrix:\n", scores_fold["Confusion"])
         print("Accuracy:", np.round(scores_fold["Accuracy"], 2))
         print("F1 score:", np.round(scores_fold["F1"], 2))
-        numeric_scores_fold = pd.DataFrame.from_dict({k: [v] for k, v in scores_fold.items() if k in ["Accuracy", "F1"]})
+        print("Balanced accuracy:", np.round(scores_fold["balanced_acc"], 2))
+        numeric_scores_fold = pd.DataFrame.from_dict({k: [v] for k, v in scores_fold.items() if k in ["Accuracy", "F1", "balanced_acc"]})
         numeric_scores_fold["no_samples"] = len(val_fold_indices)
         total_scores = total_scores.append(numeric_scores_fold)
     print("\n-------Overall cross-validation scores-------")
 
-    mean_scores = {"Accuracy": (total_scores.Accuracy * total_scores.no_samples).sum() / total_scores.no_samples.sum(),
-                   "F1": (total_scores.F1 * total_scores.no_samples).sum() / total_scores.no_samples.sum()}
-    print(mean_scores)
+    weighted_mean_acc = (total_scores.Accuracy * total_scores.no_samples).sum() / total_scores.no_samples.sum()
+    weighted_mean_f1 = (total_scores.F1 * total_scores.no_samples).sum() / total_scores.no_samples.sum()
+    weighted_mean_bal_acc = (total_scores.balanced_acc * total_scores.no_samples).sum() / total_scores.no_samples.sum()
+    weighted_std_acc = np.sqrt(np.cov(total_scores.Accuracy, fweights=total_scores.no_samples))
+    weighted_std_f1 = np.sqrt(np.cov(total_scores.F1, fweights=total_scores.no_samples))
+    weighted_std_bal_acc = np.sqrt(np.cov(total_scores.balanced_acc, fweights=total_scores.no_samples))
+    cv_scores_stats = pd.DataFrame({"mean": [weighted_mean_acc, weighted_mean_f1, weighted_mean_bal_acc],
+                                    "std": [weighted_std_acc, weighted_std_f1, weighted_std_bal_acc]},
+                                   index=["Accuracy", "F1", "Balanced accuracy"])
+    print(cv_scores_stats.round(2))
 
 
 if __name__ == '__main__':
@@ -388,8 +425,6 @@ if __name__ == '__main__':
         print("GPU:", torch.cuda.get_device_name(0))
 
     print("\n\n----------------------LOADING DATA-----------------------")
-    timbre_CNN_type = SingleNoteTimbreCNN
-    #timbre_CNN_type = MelodyTimbreCNN
     if timbre_CNN_type == SingleNoteTimbreCNN:
         hyperparams = hyperparams_single
         loader = InstrumentLoader(data_dir, note_range=[48, 72], set_velocity=None, normalise_wavs=True, load_MIDIsampled=True)
@@ -426,10 +461,12 @@ if __name__ == '__main__':
         print("\n\n---------------------CROSS-VALIDATION---------------------")
         cross_validate(cnn_type=timbre_CNN_type,
                        cross_val_subset=data_seen, #data_seen.iloc[train_indices],
-                       cv_mode="5fold",
+                       cv_folds=4,
                        partition_mode="segment-instruments-random-balanced")
 
     print("\n\n-------------------RE-TRAINED MODEL-----------------------")
+    print(timbre_CNN_type.__name__, "with parameters:")
+    print(hyperparams)
     model_filename = "model_"+str(batch_size)+"_"+str(epochs)+"_"+str(learning_rate)+"_"+model_name
     saved_model_path = os.path.join(model_dir, timbre_CNN_type.__name__, model_filename+".pth")
     if not os.path.isfile(saved_model_path):

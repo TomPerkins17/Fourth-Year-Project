@@ -1,4 +1,10 @@
 Instrument,Accuracy,Class
+Nord_BambinoUpright-XL,0.97,Upright
+Nord_ConcertGrand1Amb-Lrg,0.96,Grand
+Nord_GrandLadyD-Lrg,0.92,Grand
+Nord_QueenUpright-Lrg,0.95,Upright
+Nord_SilverGrand-XL,0.97,Grand
+Instrument,Accuracy,Class
 AkPnBcht,0.95,Grand
 AkPnBsdf,0.89,Grand
 AkPnCGdD,0.9,Grand
