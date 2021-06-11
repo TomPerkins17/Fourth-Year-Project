@@ -1,4 +1,5 @@
 # %%
+import csv
 import warnings
 import sklearn
 import pandas as pd
@@ -21,7 +22,7 @@ timbre_CNN_type = SingleNoteTimbreCNN
 
 # Hyperparameters
 hyperparams_single = {"batch_size": 256,  # GPU memory limits us to <512
-                      "epochs": 25,
+                      "epochs": 1,
                       "learning_rate": 0.002,
                       "loss_function": nn.BCELoss()}
 
@@ -163,6 +164,7 @@ def generate_split_indices(data, partition_ratios=None, mode="mixed", seed=None)
         raise Exception("Mode not recognised")
 
     # Print training, validation and test set statistics
+    print("")
     indices_train = indices_train.astype(int)
     indices_val = indices_val.astype(int)
     print(len(indices_train), "training samples")
@@ -189,7 +191,7 @@ def generate_split_indices(data, partition_ratios=None, mode="mixed", seed=None)
     return indices_train, indices_val, indices_test
 
 
-def generate_crossval_fold_indices(data, seed=None, folds=5):
+def generate_crossval_fold_indices(data, seed=None, folds=5, verbose=True):
     rng = np.random.default_rng(seed=seed)
     instruments_grand = data[data.label == 0].instrument.unique()
     instruments_upright = data[data.label == 1].instrument.unique()
@@ -249,24 +251,36 @@ def generate_crossval_fold_indices(data, seed=None, folds=5):
     np.random.shuffle(indices_fold3)
     np.random.shuffle(indices_fold4)
     np.random.shuffle(indices_fold5)
-
-    print(len(indices_fold1), "samples in fold 1")
-    print("\t", pd.unique(data.iloc[indices_fold1].instrument))
-    print(len(indices_fold2), "samples in fold 2")
-    print("\t", pd.unique(data.iloc[indices_fold2].instrument))
-    print(len(indices_fold3), "samples in fold 3")
-    print("\t", pd.unique(data.iloc[indices_fold3].instrument))
-    print(len(indices_fold4), "samples in fold 4")
-    print("\t", pd.unique(data.iloc[indices_fold4].instrument))
-    if folds == 5:
-        print(len(indices_fold5), "samples in fold 5")
-        print("\t", pd.unique(data.iloc[indices_fold5].instrument))
+    if verbose:
+        print(len(indices_fold1), "samples in fold 1")
+        print("\t", pd.unique(data.iloc[indices_fold1].instrument))
+        print(len(indices_fold2), "samples in fold 2")
+        print("\t", pd.unique(data.iloc[indices_fold2].instrument))
+        print(len(indices_fold3), "samples in fold 3")
+        print("\t", pd.unique(data.iloc[indices_fold3].instrument))
+        print(len(indices_fold4), "samples in fold 4")
+        print("\t", pd.unique(data.iloc[indices_fold4].instrument))
+        if folds == 5:
+            print(len(indices_fold5), "samples in fold 5")
+            print("\t", pd.unique(data.iloc[indices_fold5].instrument))
 
     return indices_fold1, indices_fold2, indices_fold3, indices_fold4, indices_fold5
 
 
-def train_model(cnn_type, train_set, val_set=None, plot_title=""):
-    print("\n--------------TRAINING MODEL--------------")
+def train_model(cnn_type, params, local_dataset, train_ind, val_loader=None, plot=True, plot_title="", verbose=True):
+    if verbose:
+        print("\n--------------TRAINING MODEL--------------")
+        print(timbre_CNN_type.__name__, "with parameters:")
+        print(params)
+    # Unpack the hyperparameters
+    batch_size = params["batch_size"]
+    epochs = params["epochs"]
+    learning_rate = params["learning_rate"]
+    loss_function = params["loss_function"]
+    loader_train = DataLoader(local_dataset, batch_size=batch_size, shuffle=False,
+                              sampler=sampler.SubsetRandomSampler(train_ind),
+                              pin_memory=True)
+
     model = cnn_type().to(device, non_blocking=True)
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
 
@@ -277,7 +291,7 @@ def train_model(cnn_type, train_set, val_set=None, plot_title=""):
         for epoch in range(epochs):
             model.train()
             running_loss = 0.0
-            for i, batch in enumerate(train_set):
+            for i, batch in enumerate(loader_train):
                 x = batch[0].float().to(device, non_blocking=True)
                 label = batch[1].float().to(device, non_blocking=True)
 
@@ -291,15 +305,16 @@ def train_model(cnn_type, train_set, val_set=None, plot_title=""):
                 gc.collect()
             # Record training loss
             mean_epoch_loss = (running_loss/(batch_size*(i+1))).item()
-            print("+Training - Epoch", epoch+1, "loss:", mean_epoch_loss)
+            if verbose:
+                print("+Training - Epoch", epoch+1, "loss:", mean_epoch_loss)
             loss_train_log.append(mean_epoch_loss)
 
             # Calculate loss on validation set
-            if (epoch == epochs-1 or epoch % val_interval == 0) and val_set is not None:
+            if (epoch == epochs-1 or epoch % val_interval == 0) and val_loader is not None and plot:
                 loss_val = 0
                 model.eval()
                 with torch.no_grad():
-                    for i, batch in enumerate(val_set):
+                    for i, batch in enumerate(val_loader):
                         x = batch[0].float().to(device, non_blocking=True)
                         label = batch[1].float().to(device, non_blocking=True)
                         y = model(x)
@@ -311,16 +326,18 @@ def train_model(cnn_type, train_set, val_set=None, plot_title=""):
                 epoch_val_log.append(epoch+1)
 
     # Plot training curves
-    fig = plt.figure()
-    plt.plot(range(1, epochs + 1), loss_train_log, c='r', label='train')
-    if val_set is not None:
-        plt.plot(epoch_val_log, loss_val_log, c='b', label='val')
-    plt.legend()
-    plt.xlabel('epoch')
-    plt.ylabel('loss')
-    plt.grid()
-    plt.title("Loss curve over "+str(epochs)+" epochs of training - "+plot_title)
-    plt.show()
+    fig = None
+    if plot:
+        fig = plt.figure()
+        plt.plot(range(1, epochs + 1), loss_train_log, c='r', label='train')
+        if val_loader is not None:
+            plt.plot(epoch_val_log, loss_val_log, c='b', label='val')
+        plt.legend()
+        plt.xlabel('epoch')
+        plt.ylabel('loss')
+        plt.grid()
+        plt.title("Loss curve over "+str(epochs)+" epochs of training - "+plot_title)
+        plt.show()
 
     return model, fig
 
@@ -359,7 +376,7 @@ def evaluate_CNN(evaluated_model, test_set):
     return overall_scores, per_inst_scores
 
 
-def cross_validate(cnn_type, cross_val_subset, cv_folds=2, partition_mode=None):
+def cross_validate(cnn_type, hyparams, cross_val_subset, cv_folds=2, partition_mode=None, plot_train_curves=True, verbose=True):
 
     cv_dataset = TimbreDataset(cross_val_subset)
     total_scores = pd.DataFrame()
@@ -369,14 +386,14 @@ def cross_validate(cnn_type, cross_val_subset, cv_folds=2, partition_mode=None):
         training_sets = [set_1, set_2]
         validation_sets = [set_2, set_1]
     elif cv_folds == 4:
-        fold1, fold2, fold3, fold4, _ = generate_crossval_fold_indices(cross_val_subset, folds=cv_folds, seed=None)
+        fold1, fold2, fold3, fold4, _ = generate_crossval_fold_indices(cross_val_subset, folds=cv_folds, seed=None, verbose=verbose)
         training_sets = [np.concatenate([fold2, fold3, fold4]),
                          np.concatenate([fold3, fold4, fold1]),
                          np.concatenate([fold4, fold1, fold2]),
                          np.concatenate([fold1, fold2, fold3])]
         validation_sets = [fold1, fold2, fold3, fold4]
     elif cv_folds == 5:
-        fold1, fold2, fold3, fold4, fold5 = generate_crossval_fold_indices(cross_val_subset, folds=cv_folds, seed=None)
+        fold1, fold2, fold3, fold4, fold5 = generate_crossval_fold_indices(cross_val_subset, folds=cv_folds, seed=None, verbose=verbose)
         training_sets = [np.concatenate([fold2, fold3, fold4, fold5]),
                          np.concatenate([fold3, fold4, fold5, fold1]),
                          np.concatenate([fold4, fold5, fold1, fold2]),
@@ -387,23 +404,23 @@ def cross_validate(cnn_type, cross_val_subset, cv_folds=2, partition_mode=None):
         raise Exception("CV mode "+str(cv_folds)+" not implemented")
 
     for fold, (train_fold_indices, val_fold_indices) in enumerate(zip(training_sets, validation_sets)):
-        train_fold = DataLoader(cv_dataset, batch_size=batch_size, shuffle=False,
-                                sampler=sampler.SubsetRandomSampler(train_fold_indices), pin_memory=True)
+        print("\n----------------CV FOLD "+str(fold+1)+"-----------------")
         val_fold = DataLoader(cv_dataset, batch_size=evaluation_bs, shuffle=False,
                               sampler=sampler.SubsetRandomSampler(val_fold_indices), pin_memory=True)
-        model_fold, _ = train_model(cnn_type=cnn_type, train_set=train_fold, val_set=val_fold,
-                                    plot_title="CV Fold "+str(fold+1))
+        model_fold, _ = train_model(cnn_type=cnn_type, params=hyparams,
+                                    local_dataset=cv_dataset, train_ind=train_fold_indices, val_loader=val_fold,
+                                    plot=plot_train_curves, plot_title="CV Fold "+str(fold+1), verbose=verbose)
         scores_fold, per_inst_scores_fold = evaluate_CNN(model_fold, val_fold)
-        print("\n------Fold "+str(fold+1)+" validation set scores--------")
-        print(per_inst_scores_fold)
-        print("Confusion matrix:\n", scores_fold["Confusion"])
-        print("Accuracy:", np.round(scores_fold["Accuracy"], 2))
-        print("F1 score:", np.round(scores_fold["F1"], 2))
-        print("Balanced accuracy:", np.round(scores_fold["balanced_acc"], 2))
+        if verbose:
+            print("\n------Fold "+str(fold+1)+" validation set scores--------")
+            print(per_inst_scores_fold)
+            print("Confusion matrix:\n", scores_fold["Confusion"])
+            print("Accuracy:", np.round(scores_fold["Accuracy"], 2))
+            print("F1 score:", np.round(scores_fold["F1"], 2))
+            print("Balanced accuracy:", np.round(scores_fold["balanced_acc"], 2))
         numeric_scores_fold = pd.DataFrame.from_dict({k: [v] for k, v in scores_fold.items() if k in ["Accuracy", "F1", "balanced_acc"]})
         numeric_scores_fold["no_samples"] = len(val_fold_indices)
         total_scores = total_scores.append(numeric_scores_fold)
-    print("\n-------Overall cross-validation scores-------")
 
     weighted_mean_acc = (total_scores.Accuracy * total_scores.no_samples).sum() / total_scores.no_samples.sum()
     weighted_mean_f1 = (total_scores.F1 * total_scores.no_samples).sum() / total_scores.no_samples.sum()
@@ -414,7 +431,71 @@ def cross_validate(cnn_type, cross_val_subset, cv_folds=2, partition_mode=None):
     cv_scores_stats = pd.DataFrame({"mean": [weighted_mean_acc, weighted_mean_f1, weighted_mean_bal_acc],
                                     "std": [weighted_std_acc, weighted_std_f1, weighted_std_bal_acc]},
                                    index=["Accuracy", "F1", "Balanced accuracy"])
-    print(cv_scores_stats.round(2))
+    return cv_scores_stats
+
+
+def hyperparameter_search(cnn_type, training_dataset,
+                          batch_size_space=None,
+                          epochs_space=None,
+                          lr_space=None,
+                          loss_space=None):
+    if loss_space is None:
+        loss_space = [nn.BCELoss()]
+    if lr_space is None:
+        lr_space = [0.001, 0.002, 0.003]
+    if epochs_space is None:
+        epochs_space = [15, 20, 25]
+    if batch_size_space is None:
+        batch_size_space = [128, 256, 512]
+
+    hyp_search_csv = os.path.join(result_dir, cnn_type.__name__, "hyperparam_search.csv")
+    with open(hyp_search_csv, "a", newline="") as csvfile:
+        writer = csv.writer(csvfile)
+        writer.writerow(["----------New Hyperparameter search----------"])
+        writer.writerow(["Batch size", "Epochs", "Learning rate", "Loss function"])
+
+    total_combinations = len(loss_space)*len(lr_space)*len(epochs_space)*len(batch_size_space)
+    best_score = 0
+    best_params = None
+    best_stats = None
+    i = 0
+
+    for loss_function_local in loss_space:
+        for batch_size_local in batch_size_space:
+            for learning_rate_local in lr_space:
+                for epochs_local in epochs_space:
+                    i += 1
+                    print("\n------ Hyperparameter search combination", i, "of", total_combinations, "------")
+                    print("Model type:", cnn_type.__name__)
+                    hyperparams_local={"batch_size": batch_size_local,
+                                       "epochs": epochs_local,
+                                       "learning_rate": learning_rate_local,
+                                       "loss_function": loss_function_local}
+                    print(hyperparams_local)
+                    cv_results = cross_validate(cnn_type=cnn_type,
+                                                hyparams=hyperparams_local,
+                                                cross_val_subset=training_dataset,
+                                                cv_folds=4,
+                                                partition_mode="segment-instruments-random-balanced",
+                                                plot_train_curves=False,
+                                                verbose=False)
+                    # Print the results to csv
+                    with open(hyp_search_csv, "a", newline="") as csvfile:
+                        writer = csv.writer(csvfile)
+                        writer.writerow([batch_size_local, epochs_local, learning_rate_local, loss_function_local])
+                    cv_results.to_csv(hyp_search_csv, mode="a")
+                    # Update best score
+                    balanced_acc_local = cv_results.loc["Balanced accuracy", "mean"]
+                    if balanced_acc_local > best_score:
+                        best_params = hyperparams_local
+                        best_score = balanced_acc_local
+                        best_stats = cv_results
+                        print("\n------New best performing combination------")
+                        print(best_params)
+                        print("with stats:")
+                        print(best_stats.round(3))
+
+    return best_params, best_score, best_stats
 
 
 if __name__ == '__main__':
@@ -435,43 +516,47 @@ if __name__ == '__main__':
         total_data = loader.preprocess_melodies(midi_dir, normalisation="statistics")
     else:
         raise Exception(str(timbre_CNN_type)+" doesn't exist")
-
-    batch_size = hyperparams["batch_size"]
-    epochs = hyperparams["epochs"]
-    learning_rate = hyperparams["learning_rate"]
-    loss_function = hyperparams["loss_function"]
-
     # Split into seen and unseen subsets
     data_seen = total_data[total_data.dataset == "MIDIsampled"]
     data_unseen = total_data[total_data.dataset != "MIDIsampled"]
     gc.collect()
 
+    print("\n\n----------------HYPERPARAMETER SEARCH--------------------")
+    best_params, best_score, best_stats = hyperparameter_search(cnn_type=timbre_CNN_type, training_dataset=data_seen,
+                                                                batch_size_space=[128, 256, 512],
+                                                                epochs_space=[15, 20, 25],
+                                                                lr_space=[0.001, 0.002, 0.003])
+    print("\n---------------Hyperparameter search results---------------")
+    print("Model type:", timbre_CNN_type.__name__)
+    print("Best params", best_params)
+    print("Best score", best_score)
+    print("Best stats:")
+    print(best_stats)
+    hyperparams = best_params
+
     dataset_seen = TimbreDataset(data_seen)
 
     train_indices, val_indices, _ = generate_split_indices(data_seen, partition_ratios=[0.8, 0.2],
                                                                       mode="segment-instruments-manual")
-    loader_train = DataLoader(dataset_seen, batch_size=batch_size, shuffle=False,
-                              sampler=sampler.SubsetRandomSampler(train_indices),
-                              pin_memory=True)
+    if perform_cross_val:
+        print("\n\n---------------------CROSS-VALIDATION---------------------")
+        cv_results = cross_validate(cnn_type=timbre_CNN_type, hyparams=hyperparams,
+                                    cross_val_subset=data_seen, #data_seen.iloc[train_indices],
+                                    cv_folds=4,
+                                    partition_mode="segment-instruments-random-balanced")
+        print("\n-------Overall cross-validation scores-------")
+        print(cv_results.round(2))
+
+    print("\n\n-------------------RE-TRAINED MODEL-----------------------")
     loader_val = DataLoader(dataset_seen, batch_size=evaluation_bs, shuffle=False,
                             sampler=sampler.SubsetRandomSampler(val_indices),
                             pin_memory=True)
-
-    if perform_cross_val:
-        print("\n\n---------------------CROSS-VALIDATION---------------------")
-        cross_validate(cnn_type=timbre_CNN_type,
-                       cross_val_subset=data_seen, #data_seen.iloc[train_indices],
-                       cv_folds=4,
-                       partition_mode="segment-instruments-random-balanced")
-
-    print("\n\n-------------------RE-TRAINED MODEL-----------------------")
-    print(timbre_CNN_type.__name__, "with parameters:")
-    print(hyperparams)
-    model_filename = "model_"+str(batch_size)+"_"+str(epochs)+"_"+str(learning_rate)+"_"+model_name
+    model_filename = "model_"+str(hyperparams["batch_size"])+"_"+str(hyperparams["epochs"])+"_"+str(hyperparams["learning_rate"])+"_"+model_name
     saved_model_path = os.path.join(model_dir, timbre_CNN_type.__name__, model_filename+".pth")
     if not os.path.isfile(saved_model_path):
         print("\nCreating and training new model")
-        model, loss_plot = train_model(cnn_type=timbre_CNN_type, train_set=loader_train, val_set=loader_val,
+        model, loss_plot = train_model(cnn_type=timbre_CNN_type, params=hyperparams,
+                                       local_dataset=dataset_seen, train_ind=train_indices, val_loader=loader_val,
                             plot_title="Re-trained model:\n"+model_filename)
         # Save model
         torch.save(model, saved_model_path)
