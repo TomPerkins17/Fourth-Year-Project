@@ -13,18 +13,21 @@ from melody_loading import *
 
 result_dir = "results"
 model_dir = "models"
-model_name = "MIDIsampledseen_evalmode"
+model_name = ""
 val_interval = 5
-perform_cross_val = True
+perform_hyp_search = False
+perform_cross_val = False
 evaluation_bs = 512
-timbre_CNN_type = SingleNoteTimbreCNN
-# timbre_CNN_type = MelodyTimbreCNN
+
+#timbre_CNN_type = SingleNoteTimbreCNN
+#timbre_CNN_type = SingleNoteTimbreCNNSmall
+timbre_CNN_type = MelodyTimbreCNN
 
 # Hyperparameters
-hyperparams_single = {"batch_size": 256,  # GPU memory limits us to <512
-                      "epochs": 1,
-                      "learning_rate": 0.002,
-                      "loss_function": nn.BCELoss()}
+hyperparams_single = {'batch_size': 128,
+                      'epochs': 25,
+                      'learning_rate': 0.002,
+                      'loss_function': nn.BCELoss()}
 
 hyperparams_melody = {"batch_size": 256,  # GPU memory limits us to <512
                       "epochs": 25,
@@ -337,6 +340,7 @@ def train_model(cnn_type, params, local_dataset, train_ind, val_loader=None, plo
         plt.ylabel('loss')
         plt.grid()
         plt.title("Loss curve over "+str(epochs)+" epochs of training - "+plot_title)
+        plt.tight_layout()
         plt.show()
 
     return model, fig
@@ -414,39 +418,36 @@ def cross_validate(cnn_type, hyparams, cross_val_subset, cv_folds=2, partition_m
         if verbose:
             print("\n------Fold "+str(fold+1)+" validation set scores--------")
             print(per_inst_scores_fold)
-            print("Confusion matrix:\n", scores_fold["Confusion"])
-            print("Accuracy:", np.round(scores_fold["Accuracy"], 2))
-            print("F1 score:", np.round(scores_fold["F1"], 2))
-            print("Balanced accuracy:", np.round(scores_fold["balanced_acc"], 2))
-        numeric_scores_fold = pd.DataFrame.from_dict({k: [v] for k, v in scores_fold.items() if k in ["Accuracy", "F1", "balanced_acc"]})
+            display_scores(scores_fold, plot_conf=False)
+        numeric_scores_fold = pd.DataFrame.from_dict({k: [v] for k, v in scores_fold.items() if k in ["Accuracy", "F1", "acc_grand", "acc_upright", "balanced_acc", "min_class_acc"]})
         numeric_scores_fold["no_samples"] = len(val_fold_indices)
         total_scores = total_scores.append(numeric_scores_fold)
-
+    # Calculate overall cross-validation statistics, weighted by the number of validation samples in each fold
     weighted_mean_acc = (total_scores.Accuracy * total_scores.no_samples).sum() / total_scores.no_samples.sum()
     weighted_mean_f1 = (total_scores.F1 * total_scores.no_samples).sum() / total_scores.no_samples.sum()
+    weighted_mean_acc_grand = (total_scores.acc_grand * total_scores.no_samples).sum() / total_scores.no_samples.sum()
+    weighted_mean_acc_upright = (total_scores.acc_upright * total_scores.no_samples).sum() / total_scores.no_samples.sum()
     weighted_mean_bal_acc = (total_scores.balanced_acc * total_scores.no_samples).sum() / total_scores.no_samples.sum()
+    weighted_mean_min_class_acc = (total_scores.min_class_acc * total_scores.no_samples).sum() / total_scores.no_samples.sum()
     weighted_std_acc = np.sqrt(np.cov(total_scores.Accuracy, fweights=total_scores.no_samples))
     weighted_std_f1 = np.sqrt(np.cov(total_scores.F1, fweights=total_scores.no_samples))
+    weighted_std_acc_grand = np.sqrt(np.cov(total_scores.acc_grand, fweights=total_scores.no_samples))
+    weighted_std_acc_upright = np.sqrt(np.cov(total_scores.acc_upright, fweights=total_scores.no_samples))
     weighted_std_bal_acc = np.sqrt(np.cov(total_scores.balanced_acc, fweights=total_scores.no_samples))
-    cv_scores_stats = pd.DataFrame({"mean": [weighted_mean_acc, weighted_mean_f1, weighted_mean_bal_acc],
-                                    "std": [weighted_std_acc, weighted_std_f1, weighted_std_bal_acc]},
-                                   index=["Accuracy", "F1", "Balanced accuracy"])
+    weighted_std_min_class_acc = np.sqrt(np.cov(total_scores.min_class_acc, fweights=total_scores.no_samples))
+    cv_scores_stats = pd.DataFrame({"mean": [weighted_mean_acc, weighted_mean_f1, weighted_mean_acc_grand, weighted_mean_acc_upright, weighted_mean_bal_acc, weighted_mean_min_class_acc],
+                                    "std": [weighted_std_acc, weighted_std_f1, weighted_std_acc_grand, weighted_std_acc_upright, weighted_std_bal_acc, weighted_std_min_class_acc]},
+                                   index=["Accuracy", "F1", "Grand class accuracy", "Upright class accuracy", "Balanced (macro-avg) accuracy", "Min per-class accuracy"])
     return cv_scores_stats
 
 
 def hyperparameter_search(cnn_type, training_dataset,
-                          batch_size_space=None,
-                          epochs_space=None,
-                          lr_space=None,
+                          batch_size_space,
+                          epochs_space,
+                          lr_space,
                           loss_space=None):
     if loss_space is None:
         loss_space = [nn.BCELoss()]
-    if lr_space is None:
-        lr_space = [0.001, 0.002, 0.003]
-    if epochs_space is None:
-        epochs_space = [15, 20, 25]
-    if batch_size_space is None:
-        batch_size_space = [128, 256, 512]
 
     hyp_search_csv = os.path.join(result_dir, cnn_type.__name__, "hyperparam_search.csv")
     with open(hyp_search_csv, "a", newline="") as csvfile:
@@ -460,10 +461,10 @@ def hyperparameter_search(cnn_type, training_dataset,
     best_stats = None
     i = 0
 
-    for loss_function_local in loss_space:
-        for batch_size_local in batch_size_space:
-            for learning_rate_local in lr_space:
-                for epochs_local in epochs_space:
+    for epochs_local in epochs_space:
+        for loss_function_local in loss_space:
+            for batch_size_local in batch_size_space:
+                for learning_rate_local in lr_space:
                     i += 1
                     print("\n------ Hyperparameter search combination", i, "of", total_combinations, "------")
                     print("Model type:", cnn_type.__name__)
@@ -484,11 +485,13 @@ def hyperparameter_search(cnn_type, training_dataset,
                         writer = csv.writer(csvfile)
                         writer.writerow([batch_size_local, epochs_local, learning_rate_local, loss_function_local])
                     cv_results.to_csv(hyp_search_csv, mode="a")
-                    # Update best score
-                    balanced_acc_local = cv_results.loc["Balanced accuracy", "mean"]
-                    if balanced_acc_local > best_score:
+                    # Update best score using the mean over the folds of the minimum single-class accuracy
+                    min_class_acc_local = cv_results.loc["Min per-class accuracy", "mean"]
+                    # Ensure that the best model achieves better-than-chance macro-avg accuracy, on average across the folds
+                    bal_acc_local = cv_results.loc["Balanced (macro-avg) accuracy", "mean"]
+                    if min_class_acc_local > best_score and bal_acc_local > 0.5:
                         best_params = hyperparams_local
-                        best_score = balanced_acc_local
+                        best_score = min_class_acc_local
                         best_stats = cv_results
                         print("\n------New best performing combination------")
                         print(best_params)
@@ -506,13 +509,13 @@ if __name__ == '__main__':
         print("GPU:", torch.cuda.get_device_name(0))
 
     print("\n\n----------------------LOADING DATA-----------------------")
-    if timbre_CNN_type == SingleNoteTimbreCNN:
+    if timbre_CNN_type == SingleNoteTimbreCNN or timbre_CNN_type == SingleNoteTimbreCNNSmall:
         hyperparams = hyperparams_single
         loader = InstrumentLoader(data_dir, note_range=[48, 72], set_velocity=None, normalise_wavs=True, load_MIDIsampled=True)
         total_data = loader.preprocess(fmin=20, fmax=20000, n_mels=300, normalisation="statistics")
     elif timbre_CNN_type == MelodyTimbreCNN:
         hyperparams = hyperparams_melody
-        loader = MelodyInstrumentLoader(data_dir, note_range=[48, 72], set_velocity=None, normalise_wavs=True, load_MIDIsampled=True)
+        loader = MelodyInstrumentLoader(data_dir, note_range=[48, 72], set_velocity=None, normalise_wavs=True, load_MIDIsampled=True) # Use reload_wavs=False to speed up dataloading if melspecs already generated
         total_data = loader.preprocess_melodies(midi_dir, normalisation="statistics")
     else:
         raise Exception(str(timbre_CNN_type)+" doesn't exist")
@@ -521,21 +524,29 @@ if __name__ == '__main__':
     data_unseen = total_data[total_data.dataset != "MIDIsampled"]
     gc.collect()
 
-    print("\n\n----------------HYPERPARAMETER SEARCH--------------------")
-    best_params, best_score, best_stats = hyperparameter_search(cnn_type=timbre_CNN_type, training_dataset=data_seen,
-                                                                batch_size_space=[128, 256, 512],
-                                                                epochs_space=[15, 20, 25],
-                                                                lr_space=[0.001, 0.002, 0.003])
-    print("\n---------------Hyperparameter search results---------------")
-    print("Model type:", timbre_CNN_type.__name__)
-    print("Best params", best_params)
-    print("Best score", best_score)
-    print("Best stats:")
-    print(best_stats)
-    hyperparams = best_params
+    if perform_hyp_search:
+        print("\n\n----------------HYPERPARAMETER SEARCH--------------------")
+        batch_size_space = [64, 128, 256]
+        epochs_space = [15, 20, 25]
+        lr_space = [0.001, 0.002, 0.003]
+        best_params, best_score, best_stats = hyperparameter_search(cnn_type=timbre_CNN_type, training_dataset=data_seen,
+                                                                    batch_size_space=batch_size_space,
+                                                                    epochs_space=epochs_space,
+                                                                    lr_space=lr_space)
+        print("\n---------------Hyperparameter search results---------------")
+        print("Model type:", timbre_CNN_type.__name__)
+        print("Search space:")
+        print("\tBatch sizes:", batch_size_space)
+        print("\tEpochs:", epochs_space)
+        print("\tLearning rates:", lr_space)
+        print("Best params", best_params)
+        print("Best score", best_score)
+        print("Best stats:")
+        print(best_stats)
+        if best_params is not None:
+            hyperparams = best_params
 
     dataset_seen = TimbreDataset(data_seen)
-
     train_indices, val_indices, _ = generate_split_indices(data_seen, partition_ratios=[0.8, 0.2],
                                                                       mode="segment-instruments-manual")
     if perform_cross_val:
@@ -545,13 +556,13 @@ if __name__ == '__main__':
                                     cv_folds=4,
                                     partition_mode="segment-instruments-random-balanced")
         print("\n-------Overall cross-validation scores-------")
-        print(cv_results.round(2))
+        print(cv_results.round(3))
 
     print("\n\n-------------------RE-TRAINED MODEL-----------------------")
     loader_val = DataLoader(dataset_seen, batch_size=evaluation_bs, shuffle=False,
                             sampler=sampler.SubsetRandomSampler(val_indices),
                             pin_memory=True)
-    model_filename = "model_"+str(hyperparams["batch_size"])+"_"+str(hyperparams["epochs"])+"_"+str(hyperparams["learning_rate"])+"_"+model_name
+    model_filename = "model_"+str(hyperparams["batch_size"])+"_"+str(hyperparams["epochs"])+"_"+str(hyperparams["learning_rate"])+model_name
     saved_model_path = os.path.join(model_dir, timbre_CNN_type.__name__, model_filename+".pth")
     if not os.path.isfile(saved_model_path):
         print("\nCreating and training new model")
@@ -573,7 +584,7 @@ if __name__ == '__main__':
     scores_seen, per_inst_scores_seen = evaluate_CNN(model, loader_val)
     print("---------Per-instrument scores---------")
     print(per_inst_scores_seen)
-    per_inst_scores_seen.to_csv(os.path.join(result_dir, timbre_CNN_type.__name__, model_filename + ".csv"))
+    #per_inst_scores_seen.to_csv(os.path.join(result_dir, timbre_CNN_type.__name__, model_filename + ".csv"))
     print("---Overall validation set performance---")
     display_scores(scores_seen, "Validation set")
 
@@ -583,7 +594,7 @@ if __name__ == '__main__':
     scores_unseen, per_inst_scores_unseen = evaluate_CNN(model, loader_unseen)
     print("---------Per-instrument scores---------")
     print(per_inst_scores_unseen)
-    per_inst_scores_unseen.to_csv(os.path.join(result_dir, timbre_CNN_type.__name__, model_filename + ".csv"), mode="a")
+    #per_inst_scores_unseen.to_csv(os.path.join(result_dir, timbre_CNN_type.__name__, model_filename + ".csv"), mode="a")
     print("--------Overall unseen set performance--------")
     display_scores(scores_unseen, "Unseen test set")
 

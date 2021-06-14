@@ -9,9 +9,10 @@ import scipy.io.wavfile
 
 
 signal_Fs = 44100
-midi_dir = "data/midi/sebasgverde_mono-midi-transposition/evaluation"                   # Input midi files directory
-melody_data_dir = os.path.join(pickled_data_dir, "melody_dataset", "melody_dataset_all_20_diff-melodies+MIDIsampled")    # Output pickle files directory
-no_melodies = 20   # Parameter to set how many midi files to use in dataset
+midi_dir = "data/midi/sebasgverde_mono-midi-transposition/train"                            # Input midi files directory
+melody_data_dir = os.path.join(pickled_data_dir, "melody_dataset", "melody_dataset_final")  # Output pickle directory
+no_melodies = 20   # Parameter to set how many midi files to use in dataset per velocity layer per instrument
+envelope_plotting = False
 
 
 class SignalWriter:
@@ -20,7 +21,7 @@ class SignalWriter:
         self.Fs = fs
         self.waveform = np.zeros(shape=math.ceil(self.Fs * duration), dtype="int32")
 
-    def add_note(self, start_time, end_time, pitch, debug=False):
+    def add_note(self, start_time, end_time, pitch):
         if end_time - start_time < 0.08:
             # Filter out short notes which cause glitchy sounds
             return
@@ -50,24 +51,65 @@ class SignalWriter:
             # Cut sample to note length
             sampled_note = sampled_note[:note_len]
 
-        if debug:
-            plt.plot(sampled_note)
-            plt.show()
-
-        # Apply an attack/delay envelope to the note: concave attack and release to remove clicks
+        # Apply an attack/release envelope to the note: concave attack and release to remove clicks
         attack_time = 0.005     # 5 ms attack time
         attack_len = int(self.Fs*attack_time)
         fade_in = np.sqrt(np.linspace(start=0, stop=1, num=attack_len))
+        if envelope_plotting:
+            # Before and after envelope shaping plots
+            fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(10, 8), sharey="col")
+            fig.suptitle("Single-note waveform attack and release, before and after envelope-shaping is applied", size='x-large')
+            # "Before" attack plot
+            ax1.plot(sampled_note[:int(attack_len/2)]/np.max(np.abs(sampled_note)))
+            ax1.set_title("Before attack-shaping", style='italic')
+            y_min, y_max = ax1.get_ylim()
+            ax1.set_ylim(y_min, -y_min)
+            ax1.grid(axis="y")
         sampled_note[:attack_len] = (sampled_note[:attack_len] * fade_in).astype("int32")
 
         release_time = 0.005    # 5 ms release time
         release_len = int(self.Fs*release_time)
         fade_out = np.sqrt(np.linspace(start=1, stop=0, num=release_len))
+        if envelope_plotting:
+            # "Before" release plot
+            ax2.plot(sampled_note[-release_len:]/np.max(np.abs(sampled_note)))
+            ax2.set_title("Before release-shaping", style='italic')
+            ax2.set_xticks(ticks=[0, 50, 100, 150, 200])
+            ax2.set_xticklabels(labels=np.array([0, 50, 100, 150, 200]) - release_len)
+            ax2.grid(axis="y")
         sampled_note[-release_len:] = (sampled_note[-release_len:] * fade_out).astype("int32")
 
-        if debug:
-            plt.plot(sampled_note)
+        if envelope_plotting:
+            # "After" plots
+            ax3.plot(sampled_note[:int(attack_len/2)]/np.max(np.abs(sampled_note)))
+            ax3.set(xlabel="Sample index (from waveform start)")
+            ax3.set_title("After attack-shaping", style='italic')
+            ax3.grid(axis="y")
+            ax4.plot(sampled_note[-release_len:]/np.max(np.abs(sampled_note)))
+            ax4.set_xticks(ticks=[0, 50, 100, 150, 200])
+            ax4.set_xticklabels(labels=np.array([0, 50, 100, 150, 200])-release_len)
+            ax4.set(xlabel="Sample index (from waveform end)")
+            ax4.set_title("After release-shaping", style='italic')
+            ax4.grid(axis="y")
+            fig.add_subplot(111, frameon=False)
+            plt.tick_params(labelcolor='none', which='both', top=False, bottom=False, left=False, right=False)
+            plt.ylabel("Normalised Amplitude", labelpad=20, size='large')
             plt.show()
+            fig.savefig("../Figures/Waveform_envelopes.svg")
+
+            # Envelope shaping attack/release function plots
+            fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(9, 4))
+            ax1.plot(np.arange(attack_len), fade_in)
+            ax1.set(xlabel="Sample index "+r'n'+" (from waveform start)", ylabel="Gain "+r'y')
+            ax1.set_title("Attack-shaping fade-in function ("+r'y=$\sqrt{n}$'+")")
+            ax2.plot(np.arange(release_len), fade_out)
+            ax2.set(xlabel="Sample index "+r'-n'+" (from waveform end)")
+            ax2.set_xticks(ticks=[0, 50, 100, 150, 200])
+            ax2.set_xticklabels(labels=np.array([0, 50, 100, 150, 200])-release_len)
+            ax2.set_title("Release-shaping fade-out function ("+r'y=$\sqrt{end-n}$'+")")
+            plt.tight_layout()
+            plt.show()
+            fig.savefig("../Figures/Envelope_functions.svg")
 
         self.waveform[start_index:end_index] = sampled_note
         return
@@ -94,6 +136,9 @@ class MelodyInstrumentLoader(InstrumentLoader):
         note_min = min(msg.note for msg in mid.tracks[0] if msg.type == "note_on")
         instrument_max = max(sample_instrument.pitch)
         instrument_min = min(sample_instrument.pitch)
+
+        if note_max-note_min < 3:
+            raise Exception("Melody's note range is too small")
 
         if note_max-note_min > instrument_max-instrument_min:
             raise Exception("Melody's note range is too large for the given instrument")
@@ -166,6 +211,7 @@ class MelodyInstrumentLoader(InstrumentLoader):
         for instrument_name in instrument_list:
             instrument_pkl_path = os.path.join(melody_data_dir, instrument_name+".pkl")
             if not os.path.isfile(instrument_pkl_path):
+                print("\n\n", instrument_pkl_path, "not found, applying melody generation to", instrument_name)
                 instrument_samples = self.dataset.loc[self.dataset.instrument == instrument_name]
                 instrument_out = pd.DataFrame()
 

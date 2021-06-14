@@ -1,0 +1,77 @@
+Old hyp search using balanced accuracy:
+---------------Hyperparameter search results---------------
+Best params {'batch_size': 128, 'epochs': 20, 'learning_rate': 0.001, 'loss_function': BCELoss()}
+Best score 0.7309661835748792
+Best stats:
+                       mean       std
+Accuracy           0.727536  0.017724
+F1                 0.711741  0.027834
+Balanced accuracy  0.730966  0.018477
+
+model_128_20_0.001.pth results:
+---Overall validation set performance---
+Confusion matrix:
+ [[186  39]
+ [ 45 105]]
+Accuracy: 0.78
+F1 score: 0.71
+Accuracy per-class:
+	 Grand: 0.83
+	 Upright: 0.7
+Balanced (macro-averaged) accuracy: 0.76
+Per-class minimum accuracy: 0.7
+--------Overall unseen set performance--------
+Confusion matrix:
+ [[621 504]
+ [424 551]]
+Accuracy: 0.56
+F1 score: 0.54
+Accuracy per-class:
+	 Grand: 0.55
+	 Upright: 0.57
+Balanced (macro-averaged) accuracy: 0.56
+Per-class minimum accuracy: 0.55
+
+
+Using minimum per-class accuracy:
+---------------Hyperparameter search results---------------
+Model type: SingleNoteTimbreCNN
+Search space:
+	Batch sizes: [64, 128, 256]
+	Epochs: [15, 20, 25]
+	Learning rates: [0.001, 0.002, 0.003]
+Best params {'batch_size': 128, 'epochs': 25, 'learning_rate': 0.002, 'loss_function': BCELoss()}
+Best score 0.6269565217391304
+Best stats:
+                                   mean       std
+Accuracy                       0.714203  0.038866
+F1                             0.673010  0.055138
+Grand class accuracy           0.800966  0.046902
+Upright class accuracy         0.626957  0.101315
+Balanced (macro-avg) accuracy  0.713961  0.038667
+Min per-class accuracy         0.626957  0.101315
+
+model_128_25_0.002_besthyp.pth results:
+---Overall validation set performance---
+Confusion matrix:
+ [[189  36]
+ [ 68  82]]
+Accuracy: 0.72
+F1 score: 0.61
+Accuracy per-class:
+	 Grand: 0.84
+	 Upright: 0.55
+Balanced (macro-averaged) accuracy: 0.69
+Per-class minimum accuracy: 0.55
+
+--------Overall unseen set performance--------
+Confusion matrix:
+ [[476 649]
+ [230 745]]
+Accuracy: 0.58
+F1 score: 0.63
+Accuracy per-class:
+	 Grand: 0.42
+	 Upright: 0.76
+Balanced (macro-averaged) accuracy: 0.59
+Per-class minimum accuracy: 0.42
