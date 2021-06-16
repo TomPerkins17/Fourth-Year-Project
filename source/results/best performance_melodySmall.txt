@@ -1,0 +1,81 @@
+model_128_25_0.003_smalltest.pth
+-------Overall cross-validation scores-------
+                                mean    std
+Accuracy                       0.822  0.064
+F1                             0.818  0.070
+Grand class accuracy           0.831  0.125
+Upright class accuracy         0.814  0.079
+Balanced (macro-avg) accuracy  0.822  0.065
+Min per-class accuracy         0.748  0.060
+-------------Evaluation on the validation set-------------
+---------Per-instrument scores---------
+                           Accuracy    Class
+Instrument                                  
+Nord_BambinoUpright-XL         0.98  Upright
+Nord_ConcertGrand1Amb-Lrg      0.89    Grand
+Nord_GrandLadyD-Lrg            0.89    Grand
+Nord_QueenUpright-Lrg          0.96  Upright
+Nord_SilverGrand-XL            0.95    Grand
+---Overall validation set performance---
+Confusion matrix:
+ [[4504  427]
+ [  86 2987]]
+Accuracy: 0.94
+F1 score: 0.92
+Accuracy per-class:
+	 Grand: 0.91
+	 Upright: 0.97
+Balanced (macro-averaged) accuracy: 0.94
+Per-class minimum accuracy: 0.91
+--------Overall unseen set performance--------
+Confusion matrix:
+ [[11381  1115]
+ [ 5661  4305]]
+Accuracy: 0.7
+F1 score: 0.56
+Accuracy per-class:
+	 Grand: 0.91
+	 Upright: 0.43
+Balanced (macro-averaged) accuracy: 0.67
+Per-class minimum accuracy: 0.43
+
+
+
+---------------Hyperparameter search results---------------
+Model type: MelodyTimbreCNNSmall
+Search space:
+	Batch sizes: [128, 256, 512]
+	Epochs: [20, 25]
+	Learning rates: [0.001, 0.002, 0.003]
+Best params {'batch_size': 512, 'epochs': 20, 'learning_rate': 0.003, 'loss_function': BCELoss()}
+Best score 0.7424313182064679
+Best stats:
+                                   mean       std
+Accuracy                       0.818405  0.076674
+F1                             0.808152  0.069824
+Grand class accuracy           0.857625  0.123771
+Upright class accuracy         0.770377  0.084030
+Balanced (macro-avg) accuracy  0.814001  0.077757
+Min per-class accuracy         0.742431  0.101662
+
+Results for model_512_20_0.003_besthyp.pth
+-------------Evaluation on the validation set-------------
+---------Per-instrument scores---------
+                           Accuracy    Class
+Instrument                                  
+Nord_BambinoUpright-XL         0.96  Upright
+Nord_ConcertGrand1Amb-Lrg      0.94    Grand
+Nord_GrandLadyD-Lrg            0.80    Grand
+Nord_QueenUpright-Lrg          0.97  Upright
+Nord_SilverGrand-XL            0.93    Grand
+---Overall validation set performance---
+Confusion matrix:
+ [[4363  568]
+ [ 101 2972]]
+Accuracy: 0.92
+F1 score: 0.9
+Accuracy per-class:
+	 Grand: 0.88
+	 Upright: 0.97
+Balanced (macro-averaged) accuracy: 0.93
+Per-class minimum accuracy: 0.88

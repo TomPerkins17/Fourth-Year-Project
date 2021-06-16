@@ -31,14 +31,15 @@ def evaluate_scores(label, pred):
 
 def display_scores(scores, name="", plot_conf=True):
     print("Confusion matrix:\n", scores["Confusion"])
-    print("Accuracy:", np.round(scores["Accuracy"], 2))
-    print("F1 score:", np.round(scores["F1"], 2))
+    print("Accuracy:", np.round(scores["Accuracy"], 3))
+    print("F1 score:", np.round(scores["F1"], 3))
     print("Accuracy per-class:")
-    print("\t Grand:", np.round(scores["acc_grand"], 2))
-    print("\t Upright:", np.round(scores["acc_upright"], 2))
-    print("Balanced (macro-averaged) accuracy:", np.round(scores["balanced_acc"], 2))
-    print("Per-class minimum accuracy:", np.round(scores["min_class_acc"], 2))
+    print("\t Grand:", np.round(scores["acc_grand"], 3))
+    print("\t Upright:", np.round(scores["acc_upright"], 3))
+    print("Balanced (macro-averaged) accuracy:", np.round(scores["balanced_acc"], 3))
+    print("Per-class minimum accuracy:", np.round(scores["min_class_acc"], 3))
     if plot_conf:
+        plt.rcParams.update({'font.size': 12})
         conf_plot = scores["Confusion_plot"].plot(cmap=plt.cm.Blues, colorbar=False)
         title_text = ": "+name
         conf_plot.ax_.set_title("Confusion matrix"+title_text)

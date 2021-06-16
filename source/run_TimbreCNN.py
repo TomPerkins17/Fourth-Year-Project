@@ -13,25 +13,26 @@ from melody_loading import *
 
 result_dir = "results"
 model_dir = "models"
-model_name = ""
+model_name = "_retrained"
 val_interval = 5
 perform_hyp_search = False
 perform_cross_val = False
-evaluation_bs = 512
+evaluation_bs = 256
 
 #timbre_CNN_type = SingleNoteTimbreCNN
-#timbre_CNN_type = SingleNoteTimbreCNNSmall
-timbre_CNN_type = MelodyTimbreCNN
+timbre_CNN_type = SingleNoteTimbreCNNSmall
+#timbre_CNN_type = MelodyTimbreCNN
+#timbre_CNN_type = MelodyTimbreCNNSmall
 
 # Hyperparameters
-hyperparams_single = {'batch_size': 128,
-                      'epochs': 25,
+hyperparams_single = {'batch_size': 64,
+                      'epochs': 20,
                       'learning_rate': 0.002,
                       'loss_function': nn.BCELoss()}
 
-hyperparams_melody = {"batch_size": 256,  # GPU memory limits us to <512
+hyperparams_melody = {"batch_size": 128,  # GTX 1050 limits us to <512
                       "epochs": 25,
-                      "learning_rate": 0.002,
+                      "learning_rate": 0.003,
                       "loss_function": nn.BCELoss()}
 
 
@@ -338,6 +339,7 @@ def train_model(cnn_type, params, local_dataset, train_ind, val_loader=None, plo
         plt.legend()
         plt.xlabel('epoch')
         plt.ylabel('loss')
+        plt.xticks(np.arange(1, epochs+1))
         plt.grid()
         plt.title("Loss curve over "+str(epochs)+" epochs of training - "+plot_title)
         plt.tight_layout()
@@ -513,7 +515,7 @@ if __name__ == '__main__':
         hyperparams = hyperparams_single
         loader = InstrumentLoader(data_dir, note_range=[48, 72], set_velocity=None, normalise_wavs=True, load_MIDIsampled=True)
         total_data = loader.preprocess(fmin=20, fmax=20000, n_mels=300, normalisation="statistics")
-    elif timbre_CNN_type == MelodyTimbreCNN:
+    elif timbre_CNN_type == MelodyTimbreCNN or timbre_CNN_type == MelodyTimbreCNNSmall:
         hyperparams = hyperparams_melody
         loader = MelodyInstrumentLoader(data_dir, note_range=[48, 72], set_velocity=None, normalise_wavs=True, load_MIDIsampled=True) # Use reload_wavs=False to speed up dataloading if melspecs already generated
         total_data = loader.preprocess_melodies(midi_dir, normalisation="statistics")
@@ -568,7 +570,7 @@ if __name__ == '__main__':
         print("\nCreating and training new model")
         model, loss_plot = train_model(cnn_type=timbre_CNN_type, params=hyperparams,
                                        local_dataset=dataset_seen, train_ind=train_indices, val_loader=loader_val,
-                            plot_title="Re-trained model:\n"+model_filename)
+                                       plot_title="\n"+timbre_CNN_type.__name__)
         # Save model
         torch.save(model, saved_model_path)
         print("Saved trained model to", saved_model_path)
@@ -580,13 +582,13 @@ if __name__ == '__main__':
     print(model)
     model.count_parameters()
 
-    print("\n\n-------------Evaluation on the validation set-------------")
-    scores_seen, per_inst_scores_seen = evaluate_CNN(model, loader_val)
-    print("---------Per-instrument scores---------")
-    print(per_inst_scores_seen)
-    #per_inst_scores_seen.to_csv(os.path.join(result_dir, timbre_CNN_type.__name__, model_filename + ".csv"))
-    print("---Overall validation set performance---")
-    display_scores(scores_seen, "Validation set")
+    # print("\n\n-------------Evaluation on the validation set-------------")
+    # scores_seen, per_inst_scores_seen = evaluate_CNN(model, loader_val)
+    # print("---------Per-instrument scores---------")
+    # print(per_inst_scores_seen)
+    # #per_inst_scores_seen.to_csv(os.path.join(result_dir, timbre_CNN_type.__name__, model_filename + ".csv"))
+    # print("---Overall validation set performance---")
+    # display_scores(scores_seen, "Validation set")
 
     print("\n\n--------------Evaluation on the unseen set---------------")
     dataset_unseen = TimbreDataset(data_unseen)
@@ -594,7 +596,7 @@ if __name__ == '__main__':
     scores_unseen, per_inst_scores_unseen = evaluate_CNN(model, loader_unseen)
     print("---------Per-instrument scores---------")
     print(per_inst_scores_unseen)
-    #per_inst_scores_unseen.to_csv(os.path.join(result_dir, timbre_CNN_type.__name__, model_filename + ".csv"), mode="a")
+    per_inst_scores_unseen.to_csv(os.path.join(result_dir, timbre_CNN_type.__name__, model_filename + ".csv"), mode="a")
     print("--------Overall unseen set performance--------")
-    display_scores(scores_unseen, "Unseen test set")
+    display_scores(scores_unseen, "Unseen test set\n"+timbre_CNN_type.__name__)
 

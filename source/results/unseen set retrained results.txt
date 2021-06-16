@@ -1,0 +1,63 @@
+SingleNoteTimbreCNNSmall - model_64_20_0.002_retrained
+---------Per-instrument scores---------
+                  Accuracy    Class
+Instrument                         
+AkPnBcht              0.57    Grand
+AkPnBsdf              0.23    Grand
+AkPnCGdD              0.45    Grand
+AkPnStgb              0.95  Upright
+ENSTDkAm              0.97  Upright
+ENSTDkCl              0.97  Upright
+SptkBGAm              0.27    Grand
+StbgTGd2              0.29    Grand
+grand-closed          0.68    Grand
+grand-open            0.65    Grand
+grand-removed         0.56    Grand
+upright-closed        0.98  Upright
+upright-open          0.99  Upright
+upright-semiopen      0.99  Upright
+--------Overall unseen set performance--------
+Confusion matrix:
+ [[608 517]
+ [ 18 957]]
+Accuracy: 0.75
+F1 score: 0.78
+Accuracy per-class:
+	 Grand: 0.54
+	 Upright: 0.98
+Balanced (macro-averaged) accuracy: 0.76
+Per-class minimum accuracy: 0.54
+
+
+
+MelodyTimbreCNN - model_128_25_0.003_retrained2
+---------Per-instrument scores---------
+                  Accuracy    Class
+Instrument                         
+AkPnBcht              0.93    Grand
+AkPnBsdf              0.76    Grand
+AkPnCGdD              0.69    Grand
+AkPnStgb              0.67  Upright
+ENSTDkAm              0.67  Upright
+ENSTDkCl              0.37  Upright
+SptkBGAm              0.70    Grand
+StbgTGd2              0.51    Grand
+grand-closed          0.94    Grand
+grand-open            0.95    Grand
+grand-removed         0.90    Grand
+upright-closed        0.94  Upright
+upright-open          0.97  Upright
+upright-semiopen      0.90  Upright
+--------Overall unseen set performance--------
+Confusion matrix:
+ [[9867 2629]
+ [2238 7728]]
+Accuracy: 0.78
+F1 score: 0.76
+Accuracy per-class:
+	 Grand: 0.79
+	 Upright: 0.78
+Balanced (macro-averaged) accuracy: 0.78
+Per-class minimum accuracy: 0.78
+
+

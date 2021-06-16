@@ -1,0 +1,15 @@
+Instrument,Accuracy,Class
+AkPnBcht,0.93,Grand
+AkPnBsdf,0.76,Grand
+AkPnCGdD,0.69,Grand
+AkPnStgb,0.67,Upright
+ENSTDkAm,0.67,Upright
+ENSTDkCl,0.37,Upright
+SptkBGAm,0.7,Grand
+StbgTGd2,0.51,Grand
+grand-closed,0.94,Grand
+grand-open,0.95,Grand
+grand-removed,0.9,Grand
+upright-closed,0.94,Upright
+upright-open,0.97,Upright
+upright-semiopen,0.9,Upright

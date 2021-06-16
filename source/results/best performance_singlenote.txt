@@ -33,7 +33,7 @@ Balanced (macro-averaged) accuracy: 0.56
 Per-class minimum accuracy: 0.55
 
 
-Using minimum per-class accuracy:
+USING NEW HYP SEARCH minimum per-class accuracy:
 ---------------Hyperparameter search results---------------
 Model type: SingleNoteTimbreCNN
 Search space:

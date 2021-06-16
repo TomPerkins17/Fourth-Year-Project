@@ -1,4 +1,4 @@
-model_512_25_0.002_MIDIsampledseen_evalmode_attempt2:
+model_512_25_0.002_attempt2:
 - unseen set results:
 	Accuracy: 0.79
 	F1 score: 0.76
@@ -8,27 +8,39 @@ Accuracy           0.72  0.06
 F1                 0.67  0.06
 Balanced accuracy  0.72  0.06
 
-model_256_25_0.002_MIDIsampledseen_evalmode:
-- unseen set results:
-	Accuracy: 0.83
-	F1 score: 0.78
+
+model_256_25_0.002:
+---Overall validation set performance---
+Confusion matrix:
+ [[4678  253]
+ [ 128 2945]]
+Accuracy: 0.95
+F1 score: 0.94
+Accuracy per-class:
+	 Grand: 0.95
+	 Upright: 0.96
+Balanced (macro-averaged) accuracy: 0.95
+Per-class minimum accuracy: 0.95
+--------Overall unseen set performance--------
+Confusion matrix:
+ [[10906  1590]
+ [ 2571  7395]]
+Accuracy: 0.81
+F1 score: 0.78
+Accuracy per-class:
+	 Grand: 0.87
+	 Upright: 0.74
+Balanced (macro-averaged) accuracy: 0.81
+Per-class minimum accuracy: 0.74
 - cross-validation:
                    mean   std
 Accuracy           0.73  0.06
 F1                 0.67  0.12
 Balanced accuracy  0.72  0.07
 
-model_512_20_0.002_MIDIsampledseen_evalmode_besthyp:
-- seen set results:
-	Accuracy: 0.87
-	Balanced accuracy: 0.85
-	F1 score: 0.83
-- unseen set results:
-	Accuracy: 0.68
-	Balanced accuracy: 0.65
-	F1 score: 0.53
 
 
+OLD HYP SEARCH WITH BALANCED ACC CRITERION
 ---------------Hyperparameter search results---------------
 Model type: MelodyTimbreCNN
 Search space:
@@ -42,3 +54,79 @@ Best stats:
 Accuracy           0.818676  0.050087
 F1                 0.795101  0.079126
 Balanced accuracy  0.812464  0.054628
+
+model_512_20_0.002_besthyp:
+---Overall validation set performance---
+Confusion matrix:
+ [[4594  337]
+ [ 715 2358]]
+Accuracy: 0.87
+F1 score: 0.82
+Accuracy per-class:
+	 Grand: 0.93
+	 Upright: 0.77
+Balanced (macro-averaged) accuracy: 0.85
+Per-class minimum accuracy: 0.77
+--------Overall unseen set performance--------
+Confusion matrix:
+ [[10874  1622]
+ [ 5525  4441]]
+Accuracy: 0.68
+F1 score: 0.55
+Accuracy per-class:
+	 Grand: 0.87
+	 Upright: 0.45
+Balanced (macro-averaged) accuracy: 0.66
+Per-class minimum accuracy: 0.45
+
+
+NEW HYP SEARCH USING MINIMUM CLASS-ACCURACY CRITERION
+---------------Hyperparameter search results---------------
+Model type: MelodyTimbreCNN
+Search space:
+	Batch sizes: [128, 256, 512]
+	Epochs: [20, 25]
+	Learning rates: [0.001, 0.002, 0.003]
+Best params {'batch_size': 128, 'epochs': 25, 'learning_rate': 0.003, 'loss_function': BCELoss()}
+Best score 0.7435252487978633
+Best stats:
+                                   mean       std
+Accuracy                       0.819688  0.096556
+F1                             0.805741  0.116752
+Grand class accuracy           0.847288  0.060728
+Upright class accuracy         0.805991  0.179573
+Balanced (macro-avg) accuracy  0.826640  0.093631
+Min per-class accuracy         0.743525  0.144053
+
+results for model_128_25_0.003_besthyp_minclassacc.pth
+-------------Evaluation on the validation set-------------
+---------Per-instrument scores---------
+                           Accuracy    Class
+Instrument                                  
+Nord_BambinoUpright-XL         0.96  Upright
+Nord_ConcertGrand1Amb-Lrg      0.92    Grand
+Nord_GrandLadyD-Lrg            0.78    Grand
+Nord_QueenUpright-Lrg          0.97  Upright
+Nord_SilverGrand-XL            0.98    Grand
+---Overall validation set performance---
+Confusion matrix:
+ [[4379  552]
+ [ 101 2972]]
+Accuracy: 0.92
+F1 score: 0.9
+Accuracy per-class:
+	 Grand: 0.89
+	 Upright: 0.97
+Balanced (macro-averaged) accuracy: 0.93
+Per-class minimum accuracy: 0.89
+--------Overall unseen set performance--------
+Confusion matrix:
+ [[8839 3657]
+ [2934 7032]]
+Accuracy: 0.71
+F1 score: 0.68
+Accuracy per-class:
+	 Grand: 0.71
+	 Upright: 0.71
+Balanced (macro-averaged) accuracy: 0.71
+Per-class minimum accuracy: 0.71

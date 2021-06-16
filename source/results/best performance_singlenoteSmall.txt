@@ -1,0 +1,50 @@
+---------------Hyperparameter search results---------------
+Model type: SingleNoteTimbreCNNSmall
+Search space:
+	Batch sizes: [64, 128, 256, 512]
+	Epochs: [15, 20, 25]
+	Learning rates: [0.001, 0.002, 0.003]
+Best params {'batch_size': 64, 'epochs': 20, 'learning_rate': 0.002, 'loss_function': BCELoss()}
+Best score 0.6917874396135265
+Best stats:
+                                   mean       std
+Accuracy                       0.743188  0.045764
+F1                             0.720134  0.052729
+Grand class accuracy           0.788019  0.048779
+Upright class accuracy         0.700000  0.106365
+Balanced (macro-avg) accuracy  0.744010  0.047219
+Min per-class accuracy         0.691787  0.095635
+
+Results for model_64_20_0.002_besthyp.pth:
+-------------Evaluation on the validation set-------------
+---------Per-instrument scores---------
+                           Accuracy    Class
+Instrument                                  
+Nord_BambinoUpright-XL         0.84  Upright
+Nord_ConcertGrand1Amb-Lrg      0.93    Grand
+Nord_GrandLadyD-Lrg            0.77    Grand
+Nord_QueenUpright-Lrg          0.79  Upright
+Nord_SilverGrand-XL            0.93    Grand
+---Overall validation set performance---
+Confusion matrix:
+ [[198  27]
+ [ 28 122]]
+Accuracy: 0.85
+F1 score: 0.82
+Accuracy per-class:
+	 Grand: 0.88
+	 Upright: 0.81
+Balanced (macro-averaged) accuracy: 0.85
+Per-class minimum accuracy: 0.81
+
+--------Overall unseen set performance--------
+Confusion matrix:
+ [[575 550]
+ [ 61 914]]
+Accuracy: 0.71
+F1 score: 0.75
+Accuracy per-class:
+	 Grand: 0.51
+	 Upright: 0.94
+Balanced (macro-averaged) accuracy: 0.72
+Per-class minimum accuracy: 0.51
